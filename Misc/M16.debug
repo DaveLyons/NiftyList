@@ -1,0 +1,38 @@
+*
+* M16.Debug
+*
+* by Dave Lyons
+* December 2, 1990
+*
+	macro
+&lab	name
+&lab
+	if DebugSymbols<>0 then
+	brl @pastName
+	lclc &olds
+&olds	setc &setting('string')
+	string asis
+	dc.w $7771
+	dc.b &len(&lab),'&lab'
+	string &olds
+@pastName
+	endif
+	mend
+
+* You can use procname instead of proc
+
+	macro
+&lab	procname	&x
+&lab	proc	&x
+	if DebugSymbols<>0 then
+	brl @pastName
+	lclc &olds
+&olds	setc &setting('string')
+	string asis
+	dc.w $7771
+	dc.b &len(&lab),'&lab'
+	string &olds
+@pastName
+	endif
+	mend
+

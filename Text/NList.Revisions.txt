@@ -1,0 +1,973 @@
+
+================       DAL Systems                          4-Mar-92
+Nifty List  v3.4
+
+Revision History
+================
+
+======================================================================
+Version 3.4:
+
+  o  Ctrl-W deletes a word at a time from the command line.
+
+  o  Added infix operators "+", "-", and "*" in expressions.  Operands
+     are 1, 2, or 4 bytes.  Examples:
+         `1A34+F2
+         0/300:_MaxBlock-200
+
+  o  ~s knows the name of scrap type $8003 ("resource reference").
+
+  o  The main expression buffer is now 160 bytes instead of 64, so
+     you can enter long literal strings into memory now.
+
+  o  ~m shows the name of message $0011 (wstring paths to Open/Print).
+
+  o  Control dumping (;c) knows about the Thermometer and Rectangle
+     controls in 6.0.
+
+  o  Added a data file section for request codes (for SendRequest
+     in 6.0).  The Goodies command \reqcode can display these.
+     You can also see them with (") and use them in expressions,
+     as in _SendRequest(#systemSaysBeep,0,0,5,0).
+
+  o  ~m displays the memory IDs and addresses for any messages that
+     correspond to Request Procedures in 6.0.  (Request procedures
+     are installed with AcceptRequests in the Tool Locator.)
+
+  o  Entering Nifty List from GSBug (with the "n" command) now
+     properly sets Nifty List's "current address" to what your
+     GSBug program counter was (so, for example, you can type N
+     from GSBug and then immediately type W in Nifty List to see
+     who owns the memory block you were executing in).
+
+  o  The "i" command no longer messes up the CurResourceApp setting
+     if you happen to abort the display while it's displaying a
+     a resource belonging to a different resource app.
+
+  o  When running under 6.0, the "i" command (and all other commands
+     that display the resource type, ID, and file associated with a
+     handle, such as \ri) now correctly determine which resource file,
+     even when the correct resource is "hidden" by another open resource
+     file containing a resource of the same type and ID.
+
+     (In 6.0, the MatchResourceHandle call can return the file number
+     directly, so Nifty List no longer has to rely on the usually-
+     what-we-wanted result from HomeResourceFile.)
+
+  o  Stack crawl (;s) tops out at $C000 if the stack is not in page one
+     and is not in an allocated block.
+
+  o  Tool display (T) no longer marks user tool calls using
+     ClassifyAddr (they would all come out "other" anyway).
+
+Goodies 1.6:
+
+  o  New command \reqcode displays the name of a request code, or a
+     list of all request codes in the data file.  Examples:
+        0\reqcode
+        107\reqcode
+
+  o  New command \deskpat sets the desktop pattern to a solid color
+     pattern (0..F) and uses Desktop(8) to inform the system.
+
+  o  New command \deskpic loads a 32K file and uses it for the
+     desktop picture.  Example:
+         \deskpic ":MyDisk:MyPicture"
+
+  o  New command \idinfo summarizes memory use by ID.  Examples:
+         1001\idinfo -- shows handle count and total size for
+                        ID=1001, 1101, 1201...1F01, and then the
+                        total count & size for 1x01 handles.
+         5000\idinfo -- shows memory use as above, for 5001,
+                        5002, ... 50FF.
+
+  o  New command \strings searches for what seem like printable
+     strings.  Works with an address range, a handle, or a memory
+     ID (just like \find).  Example:
+         1001\strings
+
+Green Module 1.0:
+
+  o  Green Module contains commands that used to be private to the
+     "Green System Software" group before 6.0 was released.
+
+  o  1\reqproc installs a request procedure that displays a message
+     on the text screen whenever it receives a request broadcast by
+     SendRequest.  0\reqproc removes the procedure.  (The procedure
+     does not *accept* the request, it just displays a message and
+     waits for you to hit a key.)
+
+     Not all requests are detectable by this request procedure--any
+     request directed at a specific target won't get offered to this
+     procedure.  It's useful for understanding when certain broadcast
+     requests occur, such as finderSaysHello, finderSaysGoodbye,
+     finderSaysSelectionChanged, systemSaysDeskShutDown, systemSaysBeep,
+     systemSaysMenuKey, etc.  (Note that finderSaysIdle is specifically
+     excluded, since it happens continually while you're sitting in
+     the Finder.)
+
+  For Finder 6.0:
+
+  o  \finder shows various information as returned from
+     tellFinderGetDebugInfo.
+
+  o  \fio (Finder icon objects) dumps a Finder iconObj list.  0/0\fio
+     dumps the desktop list.  _FrontWindow\fio dumps the front
+     window's icons.  handle\fio dumps starting with the specified
+     iconObj handle.
+
+  o  \fwb (Finder WindBlk) dumps the windBlk structure of a Finder
+     window (0/0\fwb for the front window).
+
+  o  \chains, \cdump, \mcdump, \ncdump -- These display some of the
+     structures the Finder uses to match icons to files and devices.
+     (The names stand for chains, chain dump, master chain dump, and
+     name chain dump.)
+
+  o  The following commands send a few of the tellFinder codes to
+     the Finder.  (The names are obsolete...I'll fix it later.  "frq"
+     stood for "Finder request", the precursor to "tellFinder".)
+        \frqopen "pathname"   -- tellFinderOpenWindow
+        \frqclose "pathname"  -- tellFinderCloseWindow
+        \frqareyouthere       -- askFinderAreYouThere
+        xxx\frqcolorselection -- tellFinderColorSelection
+        \frqidlehowlong       -- askFinderIdleHowLong
+        \frqlaunch "path"     -- tellFinderLaunchThis
+        x\frqshutdown         -- tellFinderShutDown
+        \frqinformofchange "pathname" -- tellFinderAboutChange
+
+Big Brother 0.8d2:
+
+  o  Added a lot of stuff to \spy, but it's still more at the
+     "interesting" stage than the extremely-useful stage.
+
+  o  Special-cased checking of Sound tool status to avoid false
+     warnings when the 6.0 Sound Control Panel is present.
+
+  o  Parameter checking is present for many Memory Manager,
+     QuickDraw, and QuickDraw Auxiliary calls, but not all.
+     It catches things like corrupted regions, and pointers
+     to unlocked strings and rectangles.
+
+----------------------------------------------------------------------
+Version 3.3:
+
+  o  Backslash command names are no longer case sensitive.
+
+  o  Changed in-memory handling of the data file copy so that each
+     section can be 64K.  (The NList.AppleData file is larger than
+     64K now.)
+
+  o  Option-return is like Ctrl-T Return Ctrl-T.  This is useful for
+     viewing the super-hires screen during command execution.
+
+  o  T command displays "+" next to functions that are patched by
+     the TS2/TS3 patches, "*" next to otherwise-patched functions,
+     and "?" next to Weirdly-patched functions.
+
+  o  Added nlClassifyAddr service to map from an input address
+     into a code and character indicating ROM, system patch,
+     other patch, invalid address.  (Used by T, for example.)
+
+  o  ;s stack dump of the GS/OS stack now continues with the
+     caller's stack after dumping all the way up to $BFFF.
+
+  o  ~s (display scrap contents) uses GetIndScrap when running
+     under 6.0.  (This makes it very fast.)
+
+  o  When running under System 6, Nifty List accepts service
+     requests through SendRequest (see Writing.Modules file).
+
+Goodies 1.5d2:
+
+  o  \files displays the fork number when running under 6.0.
+
+  o  Added \res command to dump Resource Manager globals.  (Shows
+     all current Resource Manager clients and their installed
+     resource converter routines.)
+
+  o  \shrsave and \shrload always use color table information from
+     bank $E1, even when the main image is in bank 1.
+
+Big Brother 0.8d1:
+
+  o  1\spy enables toolbox-call watching.  2\spy enables it with
+     sound (a speaker click on every call).  0\spy turns it off.
+
+  o  Spy is only partly done, but it's sometimes useful anyway.
+
+  o  When spy is on, the system goes very slowly, and messages
+     such as the following appear:
+        ** Caution: function called while toolset inactive or missing **
+        ** Caution: no such function in tool set **
+        ** Caution: tool called with 8-bit registers **
+        ** WARNING: tool call with Decimal mode set! **
+        ** Caution: xxxBootInit and xxxReset are reserved for the system **
+        ** Caution: functions $07xx and $08xx are reserved for future use **
+        ** Caution: caller's memory is movable or purgeable **
+        ** Caution: caller's memory ID is not valid **
+        ** Caution: caller address is not allocated **
+        ** Caution: caller's stack is not allocated **
+        ** Caution: caller's stack is movable or purgeable **
+        ** WARNING: At TLShutDown, tool $xx is still active **
+
+     The following messages appear only for DrawString calls, but
+     these things and many more will be checked on most toolbox
+     calls when it's finally done:
+        ** Detected pointer to unallocated memory **
+        ** Detected pointer to moveable or purgeable memory **
+        ** Detected pointer with extra bits set **
+        ** Detected illegal NIL pointer **
+        ** Detected pointer to invalid area **
+
+----------------------------------------------------------------------
+Version 3.2:
+
+  o  Added fast text I/O routines.  Output to the screen is around 3.5
+     times faster now.
+
+  o  A command line that is exactly the same as the previous one no
+     longer gets added to the command history.  (For example, if you
+     do a lot of separate L commands in a row you don't have to scroll
+     through them all to find your previous commands in the history.)
+
+  o  Anywhere that you can specify a range of addresses with abc.def
+     you can now also specify a starting address and length, by separating
+     them with a comma.  For example, 3/100,40;h dumps 40 bytes in hex
+     starting at $03/0100 (exactly like 3/100.13f;h).
+
+  o  When the "_" command returns a result of 2 or 4 bytes, it stores
+     makes that result the current address, so commands like the following
+     are possible (you no longer have to retype the result):
+        _LoadResource(800c,07ff0001) h
+        _FrontWindow;h
+        _GetCodeResConverter L
+
+  o  The R command now explicitly says which resource application's
+     search path it is displaying.  0r displays the current search path.
+
+  o  ~s tries to display the name of any scrap types present.  It knows
+     about text, picture, sound, Text Edit style, icon data, mask, and
+     color table.
+
+  o  Added HyperCard IIgs callback-vector support in the quote command,
+     the List command.  Two new constructs in expressions:  "#"
+     followed by the name of a HyperCard IIgs callback evaluates to
+     the function code, and "_" lets you execute a callback.  Examples:
+
+       `#HC:SendCardMessage
+       (result = 1)
+
+       _HC:SendCardMessage(300)
+       (executes the callback if HyperCard IIgs is active)
+
+  o  =\ now pauses after each module's help message, in case you have
+     enough command modules to make =\ scroll the screen.
+
+  o  Sped up the "i" command by reducing the number of times it has to
+     call the Loader to find the pathname that goes with an ID.
+
+  o  Implemented the nlDisasm1 service for command modules (see the
+     Writing.Modules file).
+
+  o  Mainly for the convenience of Nifty List users within Apple, Nifty
+     List now attempts to load NList.AppleData instead of NList.Data.
+     If NList.AppleData is not present, it loads NList.Data just like
+     before.
+
+Goodies 1.4:
+
+  o  Added \hcgs command to look up data in the new HyperCard IIgs
+     callback section of the data file.
+
+       0\hcgs   -- displays all information in the section
+       7\hcgs   -- displays information on callback function 7
+
+  o  Added \shrload and \shrsave to load and save super-hires pictures
+     (straight snapshots:  filetype $C1, auxiliary type 0).  If QuickDraw
+     is started and using bank-1 shadowing, these commands use the
+     bank 1 super-hires screen; otherwise they use the bank $E1 screen.
+
+----------------------------------------------------------------------
+Version 3.1:
+
+  o  There is command history!  The Up and Down arrows scroll through
+     previous commands (it keeps about 1000 bytes worth of your old
+     command lines).  You can scroll up to get a copy of an old command,
+     edit it if necessary, and just hit Return to use it again.
+
+     Here's the complete list of command line editing keys:
+       Ctrl-B: Move to beginning of command line
+       Ctrl-D: Delete the character at the cursor position
+       Ctrl-F: Delete the character at the cursor position
+       Ctrl-H (left arrow): move the cursor left one character
+       Ctrl-J (down arrow): move down one entry in the command history
+       Ctrl-K (up arrow): move up (back) one entry in the command history
+       Ctrl-M (return): accept the entire command line, including any
+               characters after the cursor position
+       Ctrl-Q: accept the command line, not including any characters at
+               or after the cursor position
+       Ctrl-S: Save the command line into the command history WITHOUT
+               executing it, and wipe it out (you can then execute other
+               commands and retrieve your old command line later)
+       Ctrl-U (right arrow): move the cursor right one character
+       Ctrl-X (clear): cancel the command line without executing it
+       Ctrl-Y: erase all the characters at and after the cursor position
+       ESC (Ctrl-[): cancel the command line like Ctrl-X (except if there are
+               no characters, do a Quit command instead)
+
+       Apple-E ("exchange"): toggle between insert and overstrike (insert
+               is the default)
+       Apple-F: delete the character at the cursor position
+       Apple-Y: erase all the characters at and after the cursor position
+       Apple-< (or Apple-,): move to the beginning of the command line
+       Apple-> (or Apple-.): move to the end of the command line
+
+     (Also, any time you see a cursor in Nifty List, you can use the printer
+     commands Apple-H (hardcopy), Apple-Space (linefeed), Apple-Return
+     (formfeed), Apple-4 (dump old 40-column screen), and Apple-8 (dump old
+     80-column screen).)
+
+     Command history *survives* leaving and re-entering Nifty List, but it
+     does not survive rebooting.
+
+  o  When you make a toolbox call from the command line, the result parameters
+     are listed individually by name.  For example:
+
+       _ReadTimeHex
+       Results: WkDay=$0377, Mn&Dy=$0007, Yr&Hr=$5B0F, Mn&Sec=$2C1F
+
+       _GetAddress(1)
+       Results: @Table=$00FFBD74
+
+  o  The ` (evaluate expression) command now displays the expression in
+     hex and decimal, if it is 4 bytes or shorter.  Example: `#1000 or
+     `3e8 display:
+
+       Expression = 0002:E8 03
+           String = h.
+              Hex = $000003E8
+          Decimal = 1000
+
+  o  You can now dump the content controls for any window by typing
+     the window pointer followed by ;c (the other ways to use ;c are:
+     0/0;c to dump the front window's content controls, handle;c to
+     dump a control list starting with the specified handle, and
+     CDA header pointer ;c to dump a CDA header).
+
+  o  Added support for imbedded routine names in object code.  The List
+     command recognizes these names inline, and it shows JSRs and JSLs to
+     them, too.  The format is:
+
+          BRL Skip
+          $71 $77
+          Name (with leading length byte)
+       Skip ...
+
+     Typically you will want to use a macro to conditionally put names
+     in the object.
+
+  o  ;s (stack dump) now displays imbedded routine names, so it's easy to
+     figure out where you were when you crashed, if you included names in
+     your object.
+
+     ;s now uses the same routine as List to display an instruction,
+     so you get more detail on a JSR or JSL that is found (like an E1
+     vector name).
+
+     ;s recognizes JSR ($zzzz,X) as well as JSR and JSL.
+
+  o  The "v" command now shows the names and tool set numbers for tool sets
+     that are not loaded but have entries in the Tool Pointer Table.  Also,
+     "v" shows the GSBug version if GSBug is installed (toolset $FF).
+
+  o  Changed "v" error check for tool Version calls to be BCC instead of
+     cmp #0.
+
+  o  Fixed bug where if you got into Nifty List during boot, before
+     DeskShutDown was called for the first time, the data file wouldnÕt
+     load yet.
+
+  o  Now displays a caution message on entry if the stack is only one page.
+
+  o  CDA/NDA header dumps print "(RTL)" after addresses that just RTL.
+
+  o  Fiddled with Ctrl-T twiddling.  Now it makes the border white while you're
+     looking at the super-hires screen but are still in Nifty List (if your
+     border -was- white, it makes it black instead).  If QuickDraw II is not
+     started, Ctrl-T still twiddles the border color, but it also makes a
+     chirping sound to remind you that QuickDraw isn't started.
+
+  o  Added 0/0;p (shortcut for dumping the current port).
+
+  o  Made  "===  always show zeroes for nonexistent FPTs.
+
+  o  Added service call nlGetProcName to get the symbolic name associated with
+     a given address (see Writing.Modules).
+
+  o  Fixed nlExecCmdLine service to properly dereference and lock
+     DataHandle (see Writing.Modules).
+
+
+Goodies 1.2:
+
+  o  Added \names command to search for symbolic names in object code.
+
+  o  Added \ids command to show all the main memory IDs known to the Loader.
+
+  o  Added \compact and \frag commands to show summary statistics on memory
+     fragmentation.
+
+  o  Added \addnp and \delnp to add and delete a notify proc that dumps the
+     parameters to the text screen when it gets called (waits for a keypress
+     and continues).
+
+  o  Modified \map command to check resource maps for validity.  (Displays a
+     warning when it comes across a resource record that overlaps a free
+     area.)
+
+  o  Added xxxx\ri command to display resources of a given type.
+     Note:  0\ri shows all loaded resources.
+
+  o  Made $BB a wildcard byte for \find.  (This is not a wonderful
+     solution, but it's handy.)  Example: 0\find [22 bb 0 e1] finds
+     JSLs (opcode $22) to $E100xx.
+
+  o  Added \hsize command to show handles of a selected size.
+
+----------------------------------------------------------------------
+Version 3.0:
+
+  o  You can make Toolbox calls directly from the Nifty List command
+     line!  See =_ for help.  The ` command is closely related--it
+     evaluates an expression, which can include toolbox calls (see
+     =` for the syntax of expressions).
+
+  o  Command modules are finally here!  Goodies and a preliminary Big
+     Brother module are included, and you can write your own modules.
+     See below for a summary of these modules.
+
+  o  There's a \find command to search for any sequence of bytes in
+     memory--see Goodies, below.
+
+  o  Added an Errors section to the data file.  You can search for errors
+     by name (with the " command) or use xxx\err to see a particular error
+     name (\err is in the Goodies module).  Nifty List uses this to
+     report error names while saving the NList.Settings file, and when a
+     toolbox call you make with "_" returns an error.
+
+  o  You can store values into memory using colon.   address:expressions
+     (See =: )
+
+  o  Changed the ";" command so that it never matters whether you type
+     a lowercase or uppercase letter after it.  xxx;c dumps a control
+     record if xxx is a handle; otherwise it dumps a CDA header.  xxx;r
+     dumps a region if xxx is a handle; otherwise it dumps a rectangle.
+
+  o  Whenever ;r or ;w or ;p shows a region, the handle is displayed too.
+
+  o  Here's a tip for using ("):  If you want an "exact match" for a
+     toolbox call, sometimes you can include the open parenthesis.  For
+     example, try   "NewControl(   vs.  "NewControl
+
+  o  Improved speed of I command by special-casing some memory IDs not
+     to call LGetPathname2.
+
+  o  Nifty List figures out what directory it's in and builds the
+     appropriate pathnames for NList.Settings, NList.Data, and
+     command modules.  If you have a utility that will InitialLoad
+     and InstallCDA a CDA, it works great for installing Nifty List.
+
+  o  When installed, NL now tries to remove the old copy of NL by
+     getting its service vector from the Message Center and calling
+     nlRemoveNL, RemoveCDA, UserShutDown.
+
+  o  Nifty List now tries to allocate 2K of bank 0 space to use for
+     a stack.  The memory is released when you exit Nifty List.
+
+  o  Added ^Z command for debugging commands--it causes a BRK $42 right
+     before the dispatch to the command (any "\" command, or any internal
+     command other than "\" or " ").
+
+Goodies 1.0:
+
+  o  \find command searches for any expression in a specified range,
+     in a specified handle, or in all handles owned by a specified
+     id.  Wildcard id's work just like with the "I" command.
+
+  o  Added nine commands for looking up data by number in particular
+     sections of the data file.  Looking up number 0 in any section shows
+     the entire contents of that section.
+
+        \p8     ProDOS 8 calls
+        \os     GS/OS, ProDOS 16, or Shell calls
+        \00     Bank $00 values (softswitches, F8-ROM, etc)
+        \01     Bank $01 values (GS/OS system service vectors)
+        \e0     Bank $E0 values (low-level QuickDraw procs)
+        \e1     Bank $E1 values (vectors, etc)
+        \serv   Nifty List service numbers
+        \rtype  Resource types
+        \err    GS/OS, ProDOS 8, and Toolbox error code names
+
+  o  n\shpurge shows a list of all the allocated handles with the
+     specified purge level.
+
+  o  \files lists the pathnames, reference numbers, and access mode
+     of all open GS/OS files.
+
+  o  id\map displays the resource maps for all the resource files
+     currently in the search path for the specified id.
+
+  o  \info shows the Nifty List version and the directory Nifty List
+     was loaded from.
+
+  o  There are four commands for dumping system queues:
+
+        \oomq displays the Memory Manager out-of-memory queue
+        \runq displays the Desk Manager run queue
+        \notifyq displays the GS/OS notify-proc queue
+        xxx\queue displays a standard queue with head xxx
+
+  o  For easy allocation of scratch memory:
+
+        x\getdp   allocates x pages of bank-0 space and displays the
+                  address and handle information
+        n\getmem  allocates n bytes of locked and fixed memory and
+                  displays the address and handle information
+        \release  disposes of all memory from with \getdp and \getmem
+
+Big Brother 0.5:
+
+  o  There are seven commands to help you detect when a program is
+     accidentally changing memory that doesn't belong to it.  Big
+     Brother keeps a "checksum list"--a list of memory areas in
+     which it tries to notice changes.  An area can have a constant
+     start and end, or it can be a handle (so the area moves and
+     resizes when the handle moves and resizes).
+
+  o  handle\addcs or start.end\addcs adds an area to the checksum list.
+
+  o  \showcs shows a list of all the checksum areas.
+
+  o  x\delcs deletes an area from the checksum list (x is the number
+     shown by \showcs).
+
+  o  \check tries to find changes in all the checksum areas.
+
+  o  \addfree allocates a lot of new handles, trying to fill up almost
+     all of your free memory.  All the handles get added to the
+     checksum list.  The handles are purgable so they will generally
+     go away when somebody needs the memory (an out-of-memory queue
+     routine is used so that the purgable handles don't all go away
+     at once).
+
+  o  \delfree removes all the checksum areas that \addfree added, and
+     it disposes of the handles.
+
+  o  \freestats displays the number of handles created by \addfree, the
+     number that have been purged, and the memory id used by \addfree.
+     (If you want to be cruel to your system, do an _HLockAll on that
+     ID after you do an \addfree...then you get to see what happens in
+     very low memory conditions.)
+
+----------------------------------------------------------------------
+Version 2.92:
+
+  o  Ctrl-T toggles the super-hires display on and off.
+
+  o  Improvements to ;C (dump control records).  Displays "custom control"
+     or "custom control (extended)" for custom controls, and dumps in hex
+     any information in the control record beyond the standard fields.
+
+  o  Added Nifty List's Memory Manager ID and the nlService vector to
+     the S display.
+
+  o  When a name can't be found for a JSL/JMP to a given operand in
+     banks E0/E1/01, now we go ahead and check the instruction's address
+     for a possible name.
+
+  o  ;M no longer displays garbage when a titleName is a handle or a
+     resource (it displays the 4-byte value instead).
+
+----------------------------------------------------------------------
+Version 2.90:
+
+  o  NList.Data is up to date for System Software 5.0.2, and it includes
+     new sections for bank-$01 vectors, softswitch and F8-ROM locations,
+     and more.
+
+  o  ;C knows how to display the control records for all the standard
+     extended controls.
+
+  o  Made 0/0;C display content controls of frontmost window (previously
+     you had to use ~w and then xx/xxxx;C to find the control list).
+
+  o  Configuration options are stored in NList.Settings (filetype $5A,
+     auxiliary type $8006).  The Z command saves the configuration to
+     the file.  The things that the 'p' command displays are the ones
+     that get saved in the configuration file.
+
+  o  xxxxR command lists the resource files in a given memory ID's
+     resource search path.  W, H, and I commands show resource type/id
+     for blocks that were loaded by the resource manager.
+
+  o  Additional information appears in the S)tatus display.
+
+  o  ~w displays window titles correctly, even when they are handles
+     instead of pointers (this is possible under System 5.0 and later).
+     A "+" shows that a title is stored by handle.
+
+  o  Typing 0/0;W displays info on frontmost window (previosly you had
+     to use ~w to find the front window's address & retype the number).
+
+  o  Screen dumping commands simplified:  Apple-H is hardcopy of the
+     current 80-col screen.  Apple-4 and Apple-8 print 40- and 80-column
+     pre-CDA screens.  CapsLock enables ImageWriter II MouseText dumping.
+
+  o  >p sets printer slot for screen dumping.
+
+  o  Apple-space linefeeds printer; Apple-Return formfeeds it.
+
+  o  The keyboard buffer ($0002xx) is now preserved around visits to
+     the monitor from Nifty List.
+
+  o  The i (info by memroy ID) command displays resource information
+     for handles created by the Resource Manager.  The information displayed
+     is the resource type, type name, resource ID, and file number.
+
+  o  Free blocks of memory are displayed in a 0i list.  (They aren't
+     displayed when you list blocks selectively, only when you list them
+     all.)
+
+  o  To restrict the handles listed by i to those having a particular value
+     for their attributes field, specify the value like this:  c018.1001i
+     to show blocks with ID $1x01 and attributes $C018 (typical for a code
+     segment).
+
+  o  Pathnames displayed for memory blocks are truncated to just the
+     filename, and a generic description based on the ID is displayed
+     when no specific filename is available.
+
+  o  Nifty List tolerates bit 7 being set in NList.Data (this means you
+     can edit it with Merlin if you want).
+
+  o  Primitive version of stack dump command implemented.  Syntax is
+     "bank/addr;S".  This attempts to display the sequence of JSRs and
+     JSLs that resulted in the stack pointer having value 'addr' while
+     executing in bank "bank".  For example, if you crash at $05/6789
+     with the stack set to $4321, type 5/4321;S to see a stack dump.
+
+  o  Added option to disable softswitch/ROM tags for 2-byte-operand
+     instructions (0>r), because the information displayed is correct
+     only if the bank register is set to 0, 1, $E0, or $E1 at run-time,
+     and Nifty List cannot determine whether it will be.
+
+  o  Added >d--data file flags to control whether NLIST.DATA gets loaded
+     at boot time, and whether the memory it occupies is purgable.
+     1=load NLIST.DATA at boot, 2=data file is purgable, 3=both, and
+     0=neither.  Whenever you enter Nifty List, it attempts to load
+     NLIST.DATA from disk if it isn't already in memory.
+
+  o  Added >v for voice synthesizer users.  1>v prevents all those
+     pretty lines of hyphens in table headings from being printed.
+
+  o  JSL $E1000x without an LDX# before it now prints vector name instead
+     of printing nothing.
+
+  o  Added look-ahead for complicated toolbox calls (replaced old code
+     entirely).  $E10004/C calls show ">" before name.  Miniature
+     interpreter for JSL, JMP, JMP>, LDX, BRA, and BRL (interpreting begins
+     with a JSL, JMP, or JMP>).
+
+  o  The ;h (hex dump) command has a blank after the 8th hex value
+     on each line, for ease of locating bytes at specific offsets.
+     It also omits repeated lines and shows a line of apostrophes
+     for each group of one or more lines that is identical to the line
+     above, -if- you specify a range of addresses to dump (xxxx.yyyy;h).
+
+  o  Pressing ESC when there are some characters on the input line is like
+     pressing Ctrl-X (if there are none, it quits back to the CDA menu, as
+     before).
+
+  o  ~m explains message types it knows about.  For type>$7fff,
+     it displays the p-string name at the beginning of the message.
+
+  o  You can abort ~s scan (display scrap manager data) by hitting any
+     key.
+
+Most of the support for writing your own collections of Nifty List commands
+is implemented.  Contact DAL Systems for up-to-date information on writing
+your own commands.
+
+  o  A "nlService" entry point is available to command modules, and it is
+     also published using MessageByName.  Some of the services are
+     actually implemented in 2.90, but they aren't well tested yet.
+
+  o  Extra Nifty List commands are loaded from Nifty List Module files
+     in the */System/Desk.Accs directory (filetype $BC, auxiliary type
+     $4001).
+
+  o  The "\" command introduces a multi-character command, and "=\" prints
+     the "about" help for all loaded command modules.
+
+  o  The disassembly lookahead code looks for calls to the NLService entry
+     and shows them (new data-file section added for NLService vectors;
+     support in (") added).
+
+----------------------------------------------------------------------
+Version 2.60:
+
+  o  Apple-H no longer sends control characters to the printer when
+     it finds inverse, flashing, or MouseText characters on the
+     screen.
+
+  o  The S)tatus command has new features:
+       --ROM Version is displayed
+       --the current file level is displayed if ProDOS 16 or
+         GS/OS is active (GET_LEVEL)
+       --if GS/OS is active, the results of GET_SYS_PREFS and
+         SESSION_STATUS are displayed
+       --under ProDOS 16 or GS/OS, all nonempty prefixes are
+         displayed (0 to 31 under GS/OS, 0 to 7 under P16)
+
+  o  The ";" command remembers the option most recently used, and
+     that option is the default.  For example, if you want to dump
+     5K in ASCII, you can use 12/3456;a;;;; instead of the harder-
+     to-type 12/3456;a;a;a;a;a.  The default option is used when
+     the character following a ";" is a blank, another semicolon,
+     or when the ";" is at the end of the line.
+
+[The exciting changes aren't here yet, but they're coming!]
+
+----------------------------------------------------------------------
+Version 2.50:
+
+  o  NLIST.DATA is now up-to-date as of System Disk 4.0, including
+     GS/OS 2.0.
+
+  o  ;M added for displaying the defined parts of Menu Bar and Menu
+     records.
+
+----------------------------------------------------------------------
+Version 2.42:
+
+  o  ;P and ;W were displaying bad values for the X size of the Pen
+     Size and Pen Location--fixed.  (The values LOOKED okay, but they
+     were always equal to the corresponding Y values.)
+
+  o  ~s fixed to be slow but follow the rules.  Now works under System
+     Disk 4.0 and will continue to work in the future.
+
+  o  "?" command separated into "?" for command help and "$" for
+     Shareware information.
+
+----------------------------------------------------------------------
+Version 2.41:
+
+  o  ~m was failing to display the message most recently added to the
+      Message Center (the first one in the linked list).
+
+      Remember that ~m, ~h, and ~s cheat and are not guaranteed to
+      be compatible with future system software.  If any of them
+      break, I will change Nifty List to make them re-compatible
+      when reasonable.
+
+----------------------------------------------------------------------
+Version 2.4:
+
+  o  ~h lists tasks in the HeartBeat interrupt queue.
+     ~s works with new ScrapManager on System Disk 3.2
+     ~w lists windows (front to back)  [see also ;W]
+     ~p lists interesting ports        [see also ;P]
+
+  o  ;W displays a Window (type window pointer, then ;W)
+     ;P displays a Port (type port pointer, then ;P)
+     ;r displays a rectangle (type rectangle pointer, then ;r)
+     ;R displays a Region summary (type Region, then ;R)
+     ;C displays a control list (type Control handle, then ;C)
+
+  o  The L, ;h, and ;a commands can accept a range of addresses
+     separated by a period (.).  The range does not need to
+     start and end in the same bank.
+
+  o  Info added to S display:
+       (1) RealFreeMem if it is available (Memory Manager 2.2
+           or later)  [This is the amount of RAM that would be
+           free if all purgable blocks were purged]
+       (2) prefixes 0 through 7
+
+  o  When the T command is used with a toolset number (rather
+     than a full function number), names of the functions in
+     the toolset are printed even if the toolset isn't loaded.
+     Also, the address of the toolset's FPT is printed in
+     parentheses after its name.
+
+  o  Any part specified as 0 in a Memory ID is a wildcard in
+     the I command.  Ex:  5000i shows DA memory, 1000i shows
+     application memory, 100i shows all blocks with AuxID=1.
+
+  o  Inline ProDOS 16 calls are recognized (JSL $E100B0).
+
+  o  Support for bank $E0 vectors added to L and (").  Low-level
+     QD routines added to NLIST.DATA.
+
+  o  The (") command's case insensativity was broken; now "Z"
+     is the same as "z".
+
+  o  Chains into the System Death vector to shut down the
+     Event Manager and zero the Busy count.  This makes it
+     possible to enter Nifty List if a System Death occured
+     while the event manager was on or an unbalanced INCBUSY
+     had been made.
+
+  o  Apple-H prints the screen to the printer (slot 1).  Also,
+     Apple-Option-H prints the 40-column screen as it was before
+     you entered the CDA menu; and Apple-Option-Shift-H does the
+     same for the 80-column screen.
+
+  o  All NLIST.DATA files supplied by DAL Systems now include
+     parameter information.  There's no special "big" data
+     file.
+
+----------------------------------------------------------------------
+Version 2.3:
+
+  o  The Quote (") command no longer distinguishes between upper-
+     and lower-case letters.
+
+  o  The "i" command tries harder to find a pathname for a memory
+     blocks.  If LGetPathname fails on the memory ID for a block,
+     "i" tries again with the auxiliary type nibble set to 0 (ID &
+     $F0FF).
+
+  o  ProDOS 16 calls with a nonzero high byte were not disassembled
+     correctly (the high byte was being ignored).  Both bytes are
+     now used, so APW calls ($01xx) will disassemble correctly, for
+     example.
+
+----------------------------------------------------------------------
+Version 2.22:
+
+  o  Fixed a small and recently-created bug:  The "t" command followed
+     later by a "#" (to get the address of a toolbox function) usually
+     confused the "w" (What handle) command.  [There was garbage in
+     the 4th byte of the current address.  This had no effect on
+     listings.]
+
+----------------------------------------------------------------------
+Version 2.21:
+
+  o  The (") command now displays ProDOS calls and E1 vectors matching
+     a given string, not just tools.  [There is still no ProDOS or
+     E1 vector counterpart to the "t" command.]
+
+  o  The address the T command prints next to the name of a toolset
+     is now useful; it is the address of the toolset's FPT.
+
+  o  0T displays the address of the System and User TPTs and WAPs.
+
+  o  Corrected disassembly of E10004 and E1000C tool locator calls.
+
+  o  Tools, ProDOS calls, and $E1 vector names are now shown by name
+     if called with JMP (opcode $5C) as well as JSL.
+
+  o  Bank-wrapping cleaned up; was working strangely (if you Listed
+     past the end of a bank, for example, it would work correctly,
+     but the default bank for the next command was not affected).
+
+  o  Bank $E1 vectors themselves are shown by name when listed (not
+     just JSLs and JMPs to them)  [Be sure to try E1/0L]
+
+----------------------------------------------------------------------
+Version 2.2:
+
+  o  An expanded version of the NLIST.DATA file is now available.
+     This includes a summary of tool & ProDOS *parameters* instead
+     of just their names.  Extremely handy not only for debugging
+     and browsing, but for reference while writing new code.
+
+     [This is not actually tied to a particular version; the big
+     data file works with any version of Nifty List]
+
+  o  Does not crash if loaded under ProDOS 8 (with P8CDA, for;
+     example).  However, the NLIST.DATA file will not be loaded.
+
+  o  The 'xce' instruction behaves like a 'sep #$30' in disassemblies
+     [this is the correct behavior for entering AND leaving emulation
+     mode]
+
+  o  New ";" command will dump ASCII, Hex, and NDA and CDA headers
+
+  o  No pathname is printed by the "i" command for blocks owned by
+     ID $0000.  (The Loader seems to think these are all owned by
+     TOOL.SETUP)
+
+  o  New Ctrl-N and Ctrl-E commands added.  Ctrl-N sets m and x to 0
+     for disassembling code that runs in Native mode.  Ctrl-E sets
+     m and x to 1 for disassembling code that runs in Emulation mode.
+     (Ctrl-N has a similar effect in the Monitor [with ROM 01])
+
+----------------------------------------------------------------------
+Version 2.1:
+
+  o  ~s displays Scrap Manager information if the Scrap Manager is
+     loaded.  [~s depends on the undocumented structure of the Scrap
+     Manager's private data structures; it is likely, but not
+     guaranteed, to work with future versions of the Scrap Manager.]
+
+  o  ~m displays MessageCenter information for Tool Locator version
+     2.1.  [~m depends on the Message Center's private data structures
+     and is likely, but not guaranteed, to work with future versions
+     of the Tool Locator.]
+
+  o  The "p" command now appears on the "?" screen.
+
+----------------------------------------------------------------------
+Version 2.0:
+
+  o  Nifty List now runs from the DESK.ACCS directory rather than the
+     SYSTEM.SETUP directory.  This requires System Disk 2.0 or higher
+     to work nicely.  (Under previous system disks, NLIST.DATA will be
+     loaded the first time you enter Nifty List, rather than at boot
+     time.)
+
+  o  P displays current parameter settings.
+
+  o  New parameter:  a)utoTrack forces disassembly to follow the states
+     of the x and m flags as altered by REP and SEP instructions.  This
+     is useful in most, but not all, cases.  Sequences such as PHP,
+     REP #$20, ... , PLP, ... will confuse AutoTrack, because the PLP
+     may affect the m and x flags.  1>a is the default; use 0>a to
+     disable.
+
+  o  New parameters:  m and x.  0>m sets 16-bit A, 1>x sets 8-bit index
+     registers, etc.  These are in addition to the m and x commands,
+     which still toggle m and x on and off.
+
+  o  New parameter:  which h)andle list.  Determines whether H and I
+     commands display the free list, used list, or purged list.
+
+  o  New parameter:  u)ser tools.  [Replaces the "u" command.]  Use
+     1>u to make V and T display information about user toolsets, or
+     0>u for system toolsets.  0>u is the default.
+
+----------------------------------------------------------------------
+Version 1.2:
+
+  o  The language card areas can be disassembled.  Choose which
+     bank to see with 0>L or 1>L.
+
+  o  Output can be sent to a printer in slot n with n>S
+
+  o  There is a (") command which displays all known tools whose
+     names contain a given string.  For example,
+
+        "Tool
+
+     displays the names, function numbers, and entry points for
+     LoadTools, LoadOneTool, and UnloadOneTool.
+
+  o  Q and 3D0G work in addition to Ctrl-Y for returning from the
+     monitor.
+
+======================================================================

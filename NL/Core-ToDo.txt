@@ -1,0 +1,93 @@
+*** w: show xxxxxxx+nnnn
+***   nlAddressInfo
+
+*** don't allow expressions to take 0 source characters?
+
+; Dump info on all desk accessories
+;\files should show os-busy error
+;~m--hard-code additional message types?
+;Are all the scrap types hard-coded now?
+
+;\find should be able to search language-card memory
+; ;s should know about language card memory (it half knows?)
+; stack dump--reject apparent JSRs/JSLs from invalid addresses, like $6exxxx.
+
+;Nifty List--make "0r" show entire search path, with a marker for the current file.
+
+; resource name support?
+
+; Use GetLoadSegInfo to show info on first segment
+; NiftyList--turn off Hires switch
+; NList: add a \tcount command to count toolbox calls by function, by tool set, with or without click.
+; 	flags\tcount #NewHandle (flags=1 to click, 0 to not click)
+; 	\tcount = display count
+; 	\tcount 0 = stop counting
+; 	\tcount ffff = count everything
+; 	\tcount 2 = count Memory Manager
+; NList command to dump Font Manager data structures.
+; NL: annoying 0i rsrc display
+; NList: Need error messages for stuff like OS busy, Loader not available, Resource Manager not available?
+; NList--command to dump in hex with a specified number of bytes per line
+; Data file sections:  Generic Constants? (SysBeep2 codes, AlertWindow codes)
+; Use ClassifyAddr on Vector jumps?
+; Need shorthand for "dot infinity" (as in dump from here on)
+; Nifty List--names for scrap types (in generic constants?)
+; Nicely display allocated user IDs (clone $E10FD0 and sort by $1322, display in groups)
+; NL -- switch to class-1 GetPrefix for S display
+; "1000 \find..." doesn't work (keeps bank byte)
+; Make ClassifyAddr check for Tool.Setup patches.
+; \fill
+;Dump text screen to file?
+; 
+; NList command to go through a hunk of code and find places where
+;   JMP/BRL can be BRA, etc.
+; 	JMP, BRA, BRL to next location
+; 	LDA <dp, PHA --> PEI
+; Search for repeated sequences of bytes (how??)
+; Search for sequences like PEA 0, PEA 0 that can be optimized
+;
+; Search for references to a particular location (absolute, minus one 2-byte,
+;   minus-one 3-byte, branches)
+;
+; On NewHandle, allocate small check handle afterwards, for trash checking.
+;
+; define new globals for nlGetAGlobal: address of NL Info table, service address, system patch id
+; 
+; Provide service call access through SendRequest
+; SendRequest to DAL Systems~Nifty List~
+;     reqCode = $8000+service
+;     dataIn = long input value
+;     dataOut points to (countWord,LongResult)
+;
+; aa/bbb.cc/ddd;h -- ignores cc
+; Change more SHOW4's into Show4Procs?
+; handle\pict command
+; Check for error on GetMapHandle?? (Check for NIL?)
+; ;N mask: show bit-by-bit breakdown of mask
+; Dump Menus
+; dump control-list summary (1 line per control:  Handle, Kind, ID?)
+; "@" operator
+;   ( ) Don't let \find find the "always" copies.
+;   ( ) Make ">s" work only for the standard text session?
+;
+;Finish the Nifty NDA
+
+*** Goodies:  handle\pict
+*** service call to load another module?
+*** ship an Installer script!
+*** ship a "remove Nifty List" application?
+*** should display symbolic names on branches and jumps, not just calls.
+*** ;s should know location of ChooseCDA stack
+*** ;s should know about language-card bank switching
+*** nlSetSession--bits 31-24 are flags, 31=nonText session (don't allow Ctrl-T, etc)
+*** sessions:  Ctrl-T and Apple-xxx are inappropriate during Pause
+*** need to preserve session state variables at the right times
+*** When should actEnter be called?  Now returning from monitor calls it. ???
+*** should keep data file handle unlocked most of the time while NL is active
+*** SANE stuff (fix parameters in tool calls, show specific calls if PEA)
+*** AppleTalk stuff (show call names for calls to the main vector)
+*** re-entrancy? count and show at prompt:  3 NL>
+*** InstallHook
+*** RemoveHook
+*** GetLn
+*** "*@*" marks unimplemented service handlers

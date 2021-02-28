@@ -1,0 +1,59 @@
+==
+BB
+==
+RI=resource id
+NZ=nonzero
+FT=font handle--validate header, check for PString on the beginning
+valid DA handle
+MH=menu handle
+BH=bar handle
+IC=icon pointer
+CU=cursor pointer
+PH=print record handle
+LC=locInfo
+DT=dialog/alert template
+LR=list record
+sc = scanline control byte (reserved bits?)
+r = rect
+R = region
+pt = quickdraw point
+AH = any handle (used or purged, but not free)
+<> = not equal
+
+!A = not application
+TLxx = require tool XX
+
+OpenRgn--make sure no region is already open if QD doesn't already do this
+ (ditto for polygons and pictures)
+
+1713 What's the deal?  No parameters?
+LEFromScrap and LEToScrap--need to verify that the Scrap Manager is available??
+TEShutDown--search all windows and warn if there are any TE controls!
+
+DebugVersion crashes with \spy on, when executed from the Monitor?
+AlertWindow--can't properly validate parameters in scrip language--special case?
+
+----------
+Check all action/filter/def procs for validity, in the Control
+dialog, window, Text Edit, Std File etc. managers
+
+Check templates for dialogs/windows/controls.  I don't really mean
+to necessarily validate the contents of the structure, but just that it meets
+the general rules for the structure (size, nul termination, whatever).
+
+Now I don't know how you'd implement this, or even if it's possible
+non-destrutively, but it would be good if you could determine (or even
+rough guess and say "Hey, this might blow up" if the app tries to
+install a font that will cause a crash or system weirdness.
+
+If any "NewRes" calls are made, have a state machine that makes sure that
+all the other "NewRes" calls are also made.  Or if the QD resolution is 
+changed make sure the NewRes calls are made.
+
+Check the clipping region to see if it's 'wide open' before calls that will
+trash mem are made with a default wide open clip
+
+
+Validate (roughly) FFStartSound param blocks, primarily the pointer to
+the wave form, pointer to next wave, and DOC buffer start.
+

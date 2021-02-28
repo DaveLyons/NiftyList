@@ -1,0 +1,108 @@
+
+=============
+General To-Do
+=============
+Nifty List--bundle Nifty File?
+NL: Finder dumping stuff needs to check for NIL icKind string (did I already do that?)
+NList.Data/Technote--document SCSI.MGR errors ($FFxx)
+
+NLClassifyAddr: return "=" for tool.setup patches (as opposed to TSx)
+R: show the entire resource search path
+
+Make w command show "name+xxxx" (finish the nlAddressInfo service and use it)
+
+Accept finderSaysBeforeOpen to install additional NL modules (and remove old one)
+
+check WAPs for validity (v cmd) ???
+cmd to purge data file
+Allow redirection to files
+  (redirect to a RAM-based text device that sends to a pathname?)
+Allow redirection to scrap manager
+Dynamic symbol tables for the user?
+user-defined templates for dumping data structures
+Use ByteWorks debugging info when found
+User stack of address values to pop back to:
+  << pulls from stack
+  >> pushes to stack
+Redirect output to files (redir to RAM-based text device that sends to a pathname)
+Hex/dec/etc converter
+
+Note that there is no nesting of [ ] operators (gives wacky results) (or fix it)
+
+session callback--getkey should return modifiers
+session callback--poll for abort
+session callback--Pascal strings?
+
+
+=================
+to do in a module
+=================
+show GS/OS device list
+Multi-bank Search command, including branch references!
+Show info from GetLoadSegInfo
+Resource stuff:
+  List all loaded resources
+  List all resources in open res files
+
+
+=======
+Goodies
+=======
+¥\aerr command to show network errors (section in data file)
+¥\acmd command to show AppleTalk command numbers (section in data file)
+
+\ctls -- dump contro list, one line per control
+\leh -- dump a Line Edit record handle (make ;c use this automatically?)
+Goodies--dump a tagged-strings structure by handle
+
+
+==================
+Big Brother module
+==================
+Code analyzer: Note "cmp #0, beq/bne"
+Watchdog $00/BE00 to see if the GS/OS stack is getting whomped on
+
+Need a "start tracing" option when BB complains--communicate with GSBug
+need a "don't break on this call any more" option
+check ShieldCursor flag on QD calls
+flag insufficient stack space likely on toolbox calls
+Get info from app about dp/stack size and location
+
+Catch a TaskMaster call iwth the SystemEvent record pointer?
+
+
+====================
+Expression evaluator
+====================
+NL: Have ` store the result into the current-address
+
+Toolbox calls--show result parameters by name
+
+Errors:  report message and then ask for permission to terminate
+    expression evaluation.
+
+"Identifiers" allowed (alphanumeric plus underscore)--look up in data
+    files or symbol tables (unquoted).
+
+Miniassembler-ish:  instruction -> byte string  (single quotes?)
+
+"\" introduces blank-terminated name of a function, either built-in or
+  in an external-module.
+
+
+=================
+NL to-do
+=================
+Resource stuff:
+  Locate owner of a resource [how to find filename??]
+  List all loaded resources
+  List all resources in open res files
+  Include resource info in "i" list? [is speed a problem?]
+  Show name/info of open res file(s)
+  Show current ResourceUserID
+
+;q -- dump a queue
+dump interrupt-time status; modify interrupt-time status??
+device listing
+s: class-1 prefixes?
+

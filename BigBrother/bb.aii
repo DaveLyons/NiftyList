@@ -1,0 +1,4943 @@
+* TODO:
+
+* need a validate-handle routine with flags
+
+* DisposeHandle should not complain on a NIL handle
+
+* StatusID should not complain about an invalid User ID parameter??? (\ids)
+
+* Decimal mode--losing function number for no-such-function error check?
+* Complain for m/x/d on tool call
+* Display the memory ID of the caller
+* Hard-code stack-space-required for version/status
+
+* Generic long-parameter checking.  Try it with the words in the opposite
+*   order and see if that works better!
+
+* do an 8-line stack crawl automatically on a tool intercept
+
+* cache the stack handle and the caller handle
+
+**************************************************************
+**************************************************************
+*
+* Big Brother Nifty List module
+*
+* by David A. Lyons, begun 7-Jul-90
+*
+**************************************************************
+**************************************************************
+*
+* 28-Jul-90 ==> v0.6
+*   Rewrote DoCksum for speed (it's about 4 times faster now).
+*   Fixed RangeBuff to be 16 bytes (so \addcs works more than
+*     once now).
+*
+* 28-Jul-90 ==> v0.7d1
+*   Adding interception of the tool dispatcher vectors.
+*
+* 9-Aug-90
+*   Adding SysToolPatch.
+*
+* 2-Dec-90 DAL ==> 0.7d2
+*   2\spy enables sound, 1\spy disables sound, 0\spy disables spy.
+*   Adding DebugSymbols/name calls.
+*   SysToolPatch is now removed automatically when the module dies.
+*
+* 20-Dec-90 DAL ==> 0.7d3
+*   Fixed \spy:  1\spy enables, 2\spy enables with sound.
+*
+* 8-Jan-91 DAL ==> 0.7
+*   \spy tries removing the task first before installing it,
+*   in case it's already installed.
+*
+* 30-May-91 DAL ==> 0.8d1
+*   Messing with the tool-trap stuff a bit.  Calls new services
+*     nlGet/SetTextState & does output through Nifty List.
+*
+* 31-May..2-Jun-91 DAL
+*   Put in a lot of function-independent checks on tool intercepts.
+*   Validates function number, caller's address/id, caller's stack,
+*   P register.
+*
+* 4-Jun-91 DAL
+*   On TLShutDown we make sure all interesting tools are already
+*     shut down.
+*
+* 19-Nov-91 DAL ==> 0.8d2
+*   Check SoundToolStatus by checking WAP instead of making the
+*     status call (for 6.0 Sound Control Panel patch!).
+*
+* 19..20-Nov-91 DAL
+*   Adding lots of stuff to the \spy tool-call checking.
+*   Allow GrafOn/GrafOff without QD.
+*
+* 28-Jul-92 DAL --> 0.8d3
+*   Made anyHandle routine do something (calls CheckHandle).
+*   Added scripts for simple Control Manager calls to validate
+*     that the control handle is actually a handle (does not
+*     yet validate that it's a *control* handle).
+*
+**************************************************************
+cr	equ 13
+
+DebugSymbols	equ 1
+
+	include 'all.macros'
+	include '::E16.NList'
+;;;	include 'm16.debug'
+	
+Module	PROC
+	Case off
+	export prword,prbyte,clickflag,NLService
+	export cout,crout,spout
+
+	dc.l myOpen
+	dc.l myClose
+	dc.l myAction
+	dc.l myInit
+	dc.w $0310	;minimum Nifty List version
+	dc.w 0
+	dc.b '**Big Brother\',0
+	
+myInit	rtl
+myClose	rtl
+*
+* Open routine--return address of the module's info table
+*
+myOpen	lda #InfoRec>>16
+	sta 6,s
+	lda #InfoRec
+	sta 4,s
+	rtl
+*
+* Info Record
+*
+InfoRec	dc.w InfoEnd-InfoRec  ;size of Info record
+	dc.w 0	;format (0)
+	dc.w 0	;patch type (0)
+	dc.l NLService	;address to patch
+	dc.w 12	;bytes per cmd in cmdTbl
+	dc.l cmdTbl	;command table
+InfoEnd
+*
+* jump to NLService--patched over by Nifty List
+*
+NLService	dc.l $77777777
+*
+* Command Table--for each command in this module:
+*    +000:  pointer to command name (Pascal string)
+*    +004:  address of command entry point
+*    +008:  address of help routine
+*
+* (The first entry is for the module itself.)
+*
+cmdTbl	dc.l moduleName,0,HelpModule
+	dc.l nameAddCS,cmdAddCS,helpAddCS
+	dc.l nameShowCS,cmdShowCS,helpShowCS
+	dc.l nameDelCS,cmdDelCS,helpDelCS
+	dc.l nameCheck,cmdCheck,helpCheck
+	dc.l nameAddF,cmdAddF,helpAddF
+	dc.l nameDelF,cmdDelF,helpDelF
+	dc.l nameFStats,cmdFStats,helpFStats
+	dc.l nameSpy,cmdSpy,helpSpy
+	dc.l 0
+
+moduleName	dc.b 10,'BigBrother'
+
+HelpModule	pushlong #AboutModule
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+
+AboutModule	dc.b 'Big Brother 0.8d3:',cr
+	dc.b '  \addcs       \showcs      \delcs       \check',cr
+	dc.b '  \addfree     \delfree     \freestats   \spy',cr
+	dc.b 0
+
+**************************************************************
+**************************************************************
+*
+* csCount is the number of checksum areas recorded in csHandle.
+*
+* csHandle format:
+*   +000   starting of area (see flags)
+*   +004   size of the area (ignored for handles)
+*   +008   checksum
+*   +010   flags
+*  (+012 = size of entry)
+*
+* flags:
+*   15=0:  start is an absolute address
+*   15=1:  start is a handle, end is ignored
+*   14=1:  this entry is for paranoid checking of free areas
+*   13-0:  reserved
+*
+**************************************************************
+paranoidMaxSize	equ $10000	;one bank
+paranoidMinSize	equ $00080	;stop when we hit half a page
+
+csCount	dc.w 0	;number of checksum areas
+csHandle	dc.l 0	;handle to array of checksum areas
+
+ocsStart	equ 0
+ocsSize	equ 4
+ocsCheck	equ 8
+ocsFlags	equ 10
+csEntSz	equ 12
+
+RangeBuff
+rStart	ds.b 4
+rEnd	ds.b 4
+rawStart	ds.b 4
+rawEnd	ds.b 4
+
+**************************************************************
+**************************************************************
+*
+* \addcs -- add a checksum area
+*
+**************************************************************
+nameAddCS	dc.b 5,'addcs'
+
+helpAddCS	name
+	pushlong #helpAddCSmsg
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+helpAddCSmsg	dc.b 'handle\addcs or start.end\addcs adds a checksum area',cr,0
+
+cmdAddCS	name
+	pha
+	pha
+	pushlong #RangeBuff
+	pea nlGetRange
+	jsl NLService
+	plx
+	pla
+	lda #$0000	;flags = not handle
+	cpx #2
+	beq AddArea0
+	
+	pushlong rStart
+	_CheckHandle
+	lda #$8000	;flags = Handle
+	bcc AddArea0
+	
+	pushlong #csBadHandMsg
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+csBadHandMsg	dc.b 'invalid handle',cr,0
+
+AddArea0	jsr AddArea
+	bcs @fail
+	rtl
+
+@fail	pushlong #failMsg
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+failMsg	dc.b 'failed',cr,0
+
+*
+* AddArea:  returns CLC if successful
+*
+* Takes flags in A, range in rStart and rEnd
+*
+AddArea	name
+	sta @flags
+	jsr GrowCSHandle
+	bcs @fail
+	phd
+	lda csCount
+	inc a
+	jsr FindCSEntry
+	pha
+	phy
+	tsc
+	tcd	;entryPtr is now [1]
+	lda rStart
+	sta [1]
+	ldy #ocsStart+2
+	lda rStart+2
+	sta [1],y
+	iny
+	iny
+	sec
+	lda rEnd
+	sbc rStart
+	sta [1],y
+	iny
+	iny
+	lda rEnd+2
+	sbc rStart+2
+	sta [1],y
+	
+	ldy #ocsSize
+	lda [1],y
+	inc a
+	sta [1],y
+	bne @ok
+	iny
+	iny
+	lda [1],y
+	inc a
+	sta [1],y
+@ok
+	ldy #ocsFlags
+	lda @flags
+	sta [1],y
+	pla
+	pla
+	pld
+	inc csCount
+	lda csCount
+	sec
+	jsr CheckAreaA	;sec means store the checksum
+	clc
+@fail	rts
+
+@flags	dc.w 0
+
+GrowCSHandle	name
+	pea 0
+	pea 0
+	pushlong csHandle
+	_GetHandleSize
+	pla
+	plx
+	bcc @ok
+	
+	pha
+	pha
+	pushlong #0
+	pha
+	_MMStartUp
+	pea 0
+	pha
+	pha
+	_NewHandle
+	pla
+	sta csHandle
+	pla
+	sta csHandle+2
+	bcs @exit
+	lda #0
+	tax
+@ok	adc #csEntSz	;carry is already clear
+	phx
+	pha
+	pushlong csHandle
+	_SetHandleSize
+@exit	rts
+*
+* Takes A=index (1,2,3...) and returns AY=pointer to the Ath
+*       entry in the checksum handle
+*
+FindCSEntry	name
+	phd
+	pha
+	pha	;result space
+	dec a
+	pha
+	pea csEntSz
+	_Multiply
+	pushlong csHandle
+	tsc
+	tcd
+	clc
+	lda [1]
+	adc <5
+	pha
+	ldy #2
+	lda [1],y
+	adc <7	;added 10-Jul-90 DAL.  Duh!!
+	ply
+	plx
+	plx	;pulled csHandle
+	plx
+	plx	;pulld Multiply result
+	pld
+	rts
+
+*
+* Return A = the flags for the Ath checksum entry
+*
+FetchFlagsA	jsr FindCSEntry
+	phd
+	pha
+	phy
+	tsc
+	tcd
+	ldy #ocsFlags
+	lda [1],y
+	ply
+	ply
+	pld
+	rts
+
+*
+* Return A = the handle for the Ath checksum entry
+*
+FetchHandleA	name
+	jsr FindCSEntry
+	phd
+	pha
+	phy
+	tsc
+	tcd
+	ldy #ocsStart+2
+	lda [1],y
+	pha
+	lda [1]
+	tay
+	pla
+	plx
+	plx
+	pld
+	rts
+
+**************************************************************
+**************************************************************
+*
+* \showcs -- display list of current checksum areas
+*
+**************************************************************
+nameShowCS	dc.b 6,'showcs'
+
+helpShowCS	name
+	pushlong #helpShowCSmsg
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+
+helpShowCSmsg	dc.b '\showcs lists the current checksum areas.  Areas added',cr
+	dc.b 'by \addfree are marked with a "*"',cr,0
+*
+* area where  length
+* ---- ------ ------
+*
+cmdShowCS	name
+	pushlong #showMsg
+	pea nlWriteCStr
+	jsl NLService
+	lda #0
+@next	cmp csCount
+	bcs @done
+	inc a
+	pha
+	sec
+	jsr ShowAreaA
+	pla
+	bra @next
+@done	rtl
+*
+showMsg	dc.b 'area  where   length',cr
+	dc.b '----  -----   ------',cr,0
+*
+* ShowAreaA
+*
+* aaaa: ssssss  llllll
+* aaaa: hhhhhh  handle
+*
+ShowAreaA	name
+	pha
+	jsr prword
+	lda #':'
+	jsr cout
+	jsr spout
+	pushlong csHandle
+	_HLock
+	pla
+	phd
+	jsr FindCSEntry
+	pha
+	phy
+	tsc
+	tcd
+	ldy #ocsStart+2
+	lda [1],y
+	jsr prbyte
+	lda [1]
+	jsr prword
+	jsr spout
+	jsr spout
+	ldy #ocsFlags
+	lda [1],y
+	bmi @isHand
+	
+	ldy #ocsSize+2
+	lda [1],y
+	jsr prbyte
+	ldy #ocsSize
+	lda [1],y
+	jsr prword
+	bra @exit
+@isHand	ldy #ocsStart+2
+	lda [1],y
+	pha
+	lda [1]
+	pha
+	_CheckHandle
+	bcs @disposd
+	ldy #ocsStart+2
+	lda [1],y
+	pha
+	lda [1]
+	pha
+	jsr CheckPurged
+	beq @purged
+	pushlong #msgHand
+@msg	pea nlWriteCStr
+	jsl NLService
+	bra @exit
+@disposd	pushlong #msgDisp
+	bra @msg
+@purged	pushlong #msgPurg
+	bra @msg
+@exit	ldy #ocsFlags
+	lda [1],y
+	and #$4000
+	beq @noParanoid
+	jsr spout
+	lda #'*'
+	jsr cout
+
+@noParanoid	pla
+	pla
+	pld
+	pushlong csHandle
+	_HUnlock
+	jmp crout
+
+msgHand	dc.b '(handle)',0
+msgPurg	dc.b '(handle purged)',0
+msgDisp	dc.b '(handle no longer valid)',0
+
+*
+* CheckPurged:  Push handle on stack, jsr here.
+*   Removed handle from stack and returns BEQ/A=0 if it was purged.
+*
+CheckPurged	name
+	plx
+	phd
+	tsc
+	tcd
+	ldy #2
+	lda [3],y
+	ora [3]
+	pld
+	ply
+	ply
+	phx
+	tay	;set Z
+	rts
+
+**************************************************************
+**************************************************************
+*
+* \delcs -- delete a checksum area
+*
+**************************************************************
+nameDelCS	dc.b 5,'delcs'
+
+helpDelCS	pushlong #helpDelCSmsg
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+helpDelCSmsg	dc.b 'nn\delcs deletes the specified checksum area',cr,0
+	
+cmdDelCS	name
+	jsr GetNum1
+	tay
+	beq @bad
+	dec a
+	cmp csCount
+	bcs @bad
+	inc a
+	jsr DeleteCSAreaA
+	rtl
+@bad	pushlong #msgBadArea
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+msgBadArea	dc.b 'Bad checksum area number',cr,0
+
+DeleteCSAreaA	name
+	sta @area
+	inc a
+	jsr FindCSEntry
+	pha
+	phy	;source for BlockMove
+	lda @area
+	jsr FindCSEntry
+	pha
+	phy	;dest for BlockMove
+	pha
+	pha	;space for size of move
+	sec
+	lda csCount
+	sbc @area
+	pha
+	pea csEntSz
+	_Multiply
+	_BlockMove
+	
+	dec csCount
+	pha
+	pha
+	pushlong csHandle
+	_GetHandleSize
+	pla
+	sec
+	sbc #csEntSz
+	pha
+	pushlong csHandle
+	_SetHandleSize
+	rts
+@area	dc.w 0
+
+**************************************************************
+**************************************************************
+*
+* \check -- check for changes to checksum areas
+*
+**************************************************************
+nameCheck	dc.b 5,'check'
+
+helpCheck	pushlong #helpCheckmsg
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+helpCheckmsg	dc.b '\check checks all checksum areas for changes',cr,0
+	
+cmdCheck	name
+	lda #0
+@next	cmp csCount
+	bcs @done
+	inc a
+	pha
+	sec
+	jsr CheckAreaA
+	bcc @noChg
+	pla
+	pha
+	jsr ItChanged
+@noChg	pla
+	bra @next
+@done	rtl
+
+ItChanged	pha
+	pushlong #msgChg
+	pea nlWriteCStr
+	jsl NLService
+	pla
+	jsr ShowAreaA
+	rts
+
+msgChg	dc.b 'Checksum changed in area ',0
+
+**************************************************************
+*
+* CheckAreaA:
+*
+*   A = area index, SEC=store new checksum into entry
+*
+*   Result:  A=checksum, SEC=checksum changed
+*
+**************************************************************
+CheckAreaA	name
+	ror @storeCS
+	jsr FindCSEntry
+	phd
+	pha
+	phy
+	pha
+	pha
+	pha
+	pha
+	tsc
+	tcd	;1=addr, 5=count, 9=csEntry
+	jsr DoCksum
+	ldy #ocsCheck
+	cmp [9],y
+	clc
+	beq @noStore
+	sec
+	bit @storeCS
+	bpl @noStore
+	sta [9],y
+@noStore	pla
+	pla
+	pla
+	pla
+	pla
+	pla
+	pld
+	rts
+
+@storeCS	dc.w 0
+
+*
+* DoCksum--takes 9=csEntry, sets up and uses 1=addr, 5=count,
+*          returns A=checksum
+*
+DoCksum	name
+	ldy #ocsStart
+	lda [9],y
+	sta 1
+	iny
+	iny
+	lda [9],y
+	sta 3
+	iny
+	iny
+	lda [9],y
+	sta 5
+	iny
+	iny
+	lda [9],y
+	sta 7
+	ldy #ocsFlags
+	lda [9],y
+	bpl @compute
+; Put handle size in 5; put block address in 1
+	ldy #10
+	lda [1],y
+	sta 7
+	dey
+	dey
+	lda [1],y
+	sta 5
+	
+	ldy #2
+	lda [1],y
+	pha
+	lda [1]
+	sta 1
+	pla
+	sta 3
+	ora 1
+	bne @compute
+	stz 5
+	stz 7	;it was purged!
+; Negate the count so we can increment it toward 0
+@compute	lda 5
+	eor #$ffff
+	sta 5
+	lda 7
+	eor #$ffff
+	sta 7
+	sec
+	ror 7
+	ror 5
+	php	;SEC = odd size
+
+	lda #0	;checksum in progress
+	clc	;17-bit checksum (A+carry)
+	ldy #0
+	ldx 5	;low word of "done=0" counter
+@word	inx
+	bne @ok
+	inc 7
+	beq @done
+@ok	eor [1],y
+	rol a
+	iny
+	iny
+	bne @word
+	inc 3
+	bra @word
+	
+@done	pha
+	stx 5
+	clc
+	tya
+	adc 1
+	sta 1
+	bcc @no3
+	inc 3
+@no3	pla
+	plp	;if odd size, EOR in the last byte
+	bcs @even
+	sep #$20
+	eor [1]
+	rep #$20
+@even	rts
+
+**************************************************************
+**************************************************************
+*
+* \addfree -- add free memory to checksum list
+*
+**************************************************************
+nameAddF	dc.b 7,'addfree'
+
+helpAddF	pushlong #helpAddFmsg
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+helpAddFmsg
+ dc.b '\addfree adds most free memory areas as purgable blocks and',cr
+ dc.b 'adds them to the checksum list.  Use \check later to see if any',cr
+ dc.b 'damage was done.',cr,0
+	
+cmdAddF	name
+	jsr InstallOOM
+	jsr ComputeParaID
+
+	lda #ParanoidMaxSize>>16
+	ldy #$ffff**ParanoidMaxSize
+	sta CurrentSize+2
+	sty CurrentSize
+
+	pea 0
+	lda paranoidID
+	pha
+	_SetPurgeAll	;so they don't get purged by accident
+
+	inc AddF_active
+@more	pha
+	pha
+	pushlong CurrentSize
+	lda paranoidID
+	pha
+	pea $0000	;let them move around but not go away
+	pha
+	pha
+	_NewHandle
+	ply
+	pla
+	sty rStart
+	sta rStart+2
+	bcs @noHndl
+	jsr FillHandleAY
+	lda #$C000	;handle, paranoid
+	jsr AddArea
+	php
+	lda #'.'
+	jsr cout
+	plp
+	bcc @more
+	bra @exit
+	
+@noHndl	lsr CurrentSize+2
+	ror CurrentSize
+	lda CurrentSize
+	cmp #ParanoidMinSize
+	bne @more
+	
+@exit	dec AddF_active
+
+	pea 3
+	lda paranoidID
+	pha
+	_SetPurgeAll	;mark them purgable now
+
+	jsr crout
+	rtl
+
+paranoidID	dc.w 0
+AddF_active	dc.w 0
+CurrentSize	dc.l 0
+
+ComputeParaID	name
+	lda paranoidID
+	bne @done
+	pha
+	_MMStartUp
+	pla
+	and #$f0ff
+	ora #$0e00
+	sta paranoidID
+@done	rts
+
+FillHandleAY	name
+	phd
+	pha
+	phy
+	tsc
+	tcd
+	ldy #2
+	lda [1],y
+	pha
+	lda [1]
+	sta 1
+	pla
+	sta 3
+	ldy CurrentSize
+	dey
+	dey
+	lda #$7777
+@fill	sta [1],y
+	dey
+	dey
+	bne @fill
+	sta [1],y
+	pla
+	ply
+	pld
+	rts
+
+**************************************************************
+**************************************************************
+*
+* InstallOOM -- install my out-of-memory queue so that we
+*     can purge *some* of the paranoid-handles without purging
+*     all of them.
+*
+**************************************************************
+InstallOOM	name
+	pushlong #MyOOM
+	ldx #$0C02	;_AddToOOMQueue
+	jsl $e10000
+	rts
+
+oomStage	equ 4
+oomNeeded	equ 6
+oomResult	equ 10
+
+MyOOM	dc.l 0	;queue link
+	dc.w 0	;OOM routine version
+	dc.w $a55a	;signature
+
+	lda #0
+	sta >@freed
+	sta >@freed+2
+
+	lda oomNeeded+2,s
+	sta >@need+2
+	lda oomNeeded,s
+	sta >@need
+
+	lda oomStage,s	;don't do anything on second pass
+	bne @done
+
+	lda >AddF_active
+	bne @done
+
+	phb
+	phk
+	plb
+
+@more	jsr FindOneToKill	;returns CLC, AY=handle to kill
+	bcs @finish
+	pha
+	phy	;for _PurgeHandle
+	pea 0
+	pea 0
+	pha
+	phy
+	_GetHandleSize
+	clc
+	lda 1,s
+	adc @freed
+	sta @freed
+	lda 3,s
+	adc @freed+2
+	sta @freed+2
+	sec
+	lda @need
+	sbc 1,s
+	sta @need
+	lda @need+2
+	sbc 3,s
+	sta @need+2
+	plx
+	plx	;discard size
+	_PurgeHandle
+	lda @need+2
+	bpl @more
+
+@finish	plb
+
+@done	lda >@freed+2
+	sta oomResult+2,s
+	lda >@freed
+	sta oomResult,s
+	sep #$20
+	pla
+	ply
+	plx
+	plx
+	plx
+	phy
+	pha
+	rep #$20
+	rtl
+
+@freed	dc.l 0
+@need	dc.l 0
+
+*
+* FindOneToKill--search for a Paranoid Handle that is unlocked
+*    and not already purged.  Return CLC, AY=handle.
+*
+FindOneToKill	lda #0
+@next	cmp csCount
+	bcs @done
+	inc a
+	pha
+
+	jsr FetchFlagsA
+	and #$c000
+	cmp #$c000
+	bne @nope
+	lda 1,s
+	jsr FetchHandleA
+	pha
+	phy
+	pha
+	phy
+	jsr CheckPurged	;removes 4 bytes
+	plx
+	ply
+	cmp #0
+	beq @nope	;already purged
+	phy
+	phx
+	phd
+	tsc
+	tcd
+	ldy #4
+	lda [3],y
+	sta @hFlags
+	pld
+	ply
+	pla
+	ldx @hFlags
+	bpl @xdone
+@nope	pla
+	bra @next
+@xdone	plx
+	clc
+@done	rts	;carry indicates error (clc, ay=handle)
+
+@hFlags	dc.w 0
+
+**************************************************************
+**************************************************************
+*
+* \delfree -- removes free areas from checksum list
+*
+**************************************************************
+nameDelF	dc.b 7,'delfree'
+
+helpDelF	pushlong #helpDelFmsg
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+helpDelFmsg	dc.b '\delfree removes all checksum areas created by \addfree',cr,0
+	
+cmdDelF	name
+	lda #0
+@next	cmp csCount
+	bcs @done
+	inc a
+	pha
+	jsr FetchFlagsA
+	and #$4000
+	beq @keep
+	pla
+	pha
+	jsr DisposeAreaA	
+	pla
+	pha
+	jsr DeleteCSAreaA
+	pla
+	dec a
+	pha
+@keep	pla
+	bra @next
+@done	rtl
+
+DisposeAreaA	name
+	phd
+	jsr FindCSEntry
+	pha
+	phy
+	tsc
+	tcd
+	ldy #ocsFlags
+	lda [1],y
+	bpl @notHndl
+	ldy #ocsStart+2
+	lda [1],y
+	pha
+	lda [1]
+	pha
+	_DisposeHandle
+@notHndl	pla
+	pla
+	pld
+	rts
+
+**************************************************************
+**************************************************************
+*
+* \freestats -- displays statistics on checksummed free areas
+*
+**************************************************************
+nameFStats	dc.b 9,'freestats'
+
+helpFStats	pushlong #helpFStatsmsg
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+helpFStatsmsg	dc.b '\freestats displays statistics on areas created by \addfree',cr,0
+
+cmdFStats	name
+	jsr ComputeParaID
+	lda #0
+	sta @count
+	sta @purged
+@next	cmp csCount
+	bcs @done
+	inc a
+	pha
+	jsr FetchFlagsA
+	and #$4000
+	beq @cont
+	inc @count
+	pla
+	pha
+	jsr FindCSEntry
+	phd
+	pha
+	phy
+	tsc
+	tcd
+	ldy #2
+	lda [1],y
+	pha
+	lda [1]
+	pha
+	jsr CheckPurged
+	ply
+	ply
+	pld
+	tay
+	bne @cont
+	inc @purged
+@cont	pla
+	bra @next
+
+@done	pushlong #fStats1msg
+	pea nlWriteCStr
+	jsl NLService
+	lda @count
+	jsr prword
+	
+	pushlong #fStats2msg
+	pea nlWriteCStr
+	jsl NLService
+	lda @purged
+	jsr prword
+
+	pushlong #fStats3msg
+	pea nlWriteCStr
+	jsl NLService
+	lda paranoidID
+	jsr prword
+	
+	jsr crout
+	rtl
+
+@count	dc.w 0
+@purged	dc.w 0
+
+fStats1msg	dc.b    'Total number of free-area handles: ',0
+fStats2msg	dc.b cr,'Number that have been purged:      ',0
+fStats3msg	dc.b cr,'ID = ',0
+
+
+**************************************************************
+**************************************************************
+*
+* n\spy -- add a tool dispatcher spy
+*
+**************************************************************
+	import SysToolPatch,InstallE10000,RemoveE10000
+
+nameSpy	dc.b 3,'spy'
+
+helpSpy	pushlong #msgHelpSpy
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+msgHelpSpy	dc.b 'n\spy -- add or remove a system tool call spy (2\spy clicks on tool calls)',cr,0
+
+cmdSpy	name
+	jsr GetNum1
+	tay
+	beq @remove
+
+	and #2
+	ror a
+	ror a
+	ror ClickFlag
+
+*** try removing it first, in case it's already there! (8-Jan-91 DAL)
+	pushlong #SysToolPatch
+	jsl RemoveE10000
+	ply
+	ply
+
+	pushlong #SysToolPatch
+	jsl InstallE10000
+	ply
+	ply
+	jsr prword
+	jsr crout
+	rtl
+	
+@remove	pushlong #SysToolPatch
+	jsl RemoveE10000
+	ply
+	ply
+	jsr prword
+	jsr crout
+	rtl
+
+clickFlag	dc.w $8000
+
+**************************************************************
+**************************************************************
+*
+* Action -- A=action code,  YX may point to some data
+*
+**************************************************************
+myAction	name
+	cmp #actDeath
+	bne @noDie
+	jsr ModuleDeath
+	bra @done
+@noDie
+	cmp #actBirth
+	bne @noBirth
+	jsr ModuleBirth
+	bra @done
+@noBirth
+;	cmp #actEnterNL
+;	bne @noEnter
+;	jsr EnteringNL
+;	bra @done
+;@noEnter
+@done	lda #0
+	rtl
+
+ModuleDeath	name
+	pushlong #MyOOM
+	_RemoveFromOOMQueue
+
+	pushlong #SysToolPatch
+	jsl RemoveE10000
+	ply
+	ply
+
+	rts
+
+;EnteringNL	name
+;	rts
+
+	import SystemPatchID
+
+ModuleBirth	pha
+	pha
+	pea 0
+	pea nlgInfoTable	;get the info table
+	pea nlGetAGlobal
+	jsl NLService
+	phd
+	tsc
+	tcd
+	ldy #$000c	;offset to SystemPatchID inside info table
+	lda [3],y
+	sta SystemPatchID
+	pld
+	pla
+	pla
+	rts
+
+**************************************************************
+**************************************************************
+*
+* misc subroutines
+*
+**************************************************************
+spout	name
+	pha
+	pha
+	pea nlSpout
+	jsl NLService
+	rts
+	
+crout	name
+	pha
+	pha
+	pea nlCrout
+	jsl NLService
+	rts
+	
+cout	name
+	pha
+	pha
+	pea nlWriteChar
+	jsl NLService
+	rts
+	
+prword	name
+	pha
+	pha
+	pea nlWriteWord
+	jsl NLService
+	rts
+	
+prbyte	name
+	pha
+	pha
+	pea nlWriteByte
+	jsl NLService
+	rts
+	
+GetNum1	name
+	pha
+	pha
+	pushlong #nlgNUM1
+	pea nlGetAGlobal
+	jsl NLService
+	pla
+	ply
+	rts
+
+	ENDP
+
+
+****************************************************************************
+*
+* Patch.e10000 - Routines to patch into the toolbox dispatch
+*                vectors at $e10000 and $e10004.
+*
+* By Michael Lagae
+* Green Software Quality Assurance
+* GS Toolbox Test Team
+*
+* July 18, 1989
+*
+* Written for the MPW IIGS Assembler -- Version 1.1b1, 4/9/90
+*
+* Copyright 1989-1990 by Apple Computer, Inc. (published as Apple IIgs Technical Note #87)
+*
+****************************************************************************
+
+	string asis
+	export CheckPatch	; Check for a valid patch header
+	export InstallE10000 ; Adds at patch into the toolbox vectors
+	export RemoveE10000	; Removes at toolbox dispatch vector patch
+	export SysToolPatch	; The simplest toolbox dispatch vector patch
+
+****************************************************************************
+*
+* Equates - Various equates required by these routines
+*
+**************************************************************
+versionNumber	equ $0100	; The version number of this library.
+
+dispatch1	equ $e10000	; The first toolbox dispatch vector.
+dispatch2	equ $e10004	; The second toolbox dispatch vector.
+ToolPointerTable	equ $e103c0	; Pointer to the active TPT.
+
+; Error return values from the routines InstallE10000 and RemoveE10000
+
+noError	equ $0000	; Value returned if no error occurs.
+badHeaderError	equ $8001	; Patch header wasn't valid.
+headerNotFoundError	equ $8002	; Header to remove wasn't in the linked list.
+
+****************************************************************************
+*
+* SysToolPatch - Header required of all routines that will be patched
+*               into the toolbox dispatch vectors.
+*
+* Note:  The code between next1Vector and NewDispatch2 must be included
+*        for all calls.  The code below NewDispatch2 only needs to be
+*        included for patches that want to post patch the calls.
+*
+****************************************************************************
+SysToolPatch	proc
+	entry next1Vector,next2Vector
+	entry dispatch1Vector,dispatch2Vector
+	entry NewDispatch1,NewDispatch2
+	import clickFlag
+	import prword,NLService,cout,crout,spout
+
+next1Vector		; Where dispatch1 should go when finished
+	jml next1Vector	; (Will be filled in by InstallE10000)
+next2Vector		; Where dispatch2 should go when finished
+	jml next2Vector	; (Will be filled in by InstallE10000)
+dispatch1Vector		; Holds the JML instruction from $e10000
+	jml dispatch1Vector	; (Will be filled in by InstallE10000)
+dispatch2Vector		; Holds the JML instruction from $e10004
+	jml dispatch2Vector	; (Will be filled in by InstallE10000)
+anRtl	rtl	; An RTL instruction.  Its address will be
+		; pushed on the stack for dispatch1 calls
+NewDispatch1		; Entry point for dispatch1 tooblox vector	
+	phk	; Push program bank
+	pea anRtl-1	; Push the address of a RTL
+
+NewDispatch2		; Entry point for dispatch2 toolbox vector
+
+	php	;preserve flags
+
+	php	;put a copy of P into oldPRegister
+	php
+	rep #$30
+	cld
+	pla
+	sta >oldPRegister
+
+*** increment $E100CB around this mess so we don't accidentally move memory
+	lda >$e100cb
+	inc a
+	sta >$e100cb
+
+	lda >clickFlag
+	bpl @noClick
+	php
+	sep #$20
+	lda $E0C030
+	plp
+@noClick
+	phd
+	pha
+	pha	;temp
+	pha
+	pha	;tScript space
+	pha
+	pha	;scratch space
+	tsc
+	tcd
+	jsr CheckToolboxStuff
+	pla
+	pla	;pulled tScratch
+	pla
+	pla	;pulled tScript
+	pla
+	pla	;pulled temp
+	pld
+
+	plp	;restore flags
+
+*** decrement $E100CB so memory can move again
+	lda >$e100cb
+	dec a
+	sta >$e100cb
+
+	jmp next2Vector	; Go to the original $e10004 jump instruction
+
+tScratch	equ $01
+tScript	equ tScratch+4
+tTemp	equ tScript+4
+tDP	equ tTemp+4
+tOldP	equ tDP+2
+tRTL2	equ tOldP+1
+tRTL1	equ tRTL2+3
+tParams	equ tRTL1+3
+
+****************************************************
+*
+* CheckToolboxStuff
+*
+****************************************************
+CheckToolboxStuff	name
+	phb
+	phk
+	plb
+
+	phx
+	pha
+	lda active
+	beq @continue
+	brl nocheck
+@continue	inc a
+	sta active
+
+	stx func
+
+	tdc
+	clc
+	adc #tRTL2-1
+	sta TheStackPtr
+
+	lda <tRTL1+1
+	sta where+1
+	lda <tRTL1
+	dec a
+	dec a
+	dec a
+	sta where
+
+*** check for decimal mode
+checkForDecimal	name
+	lda OldPRegister
+	and #$0008
+	beq @notDecimal
+	lda #msgDecimalMode
+	jsr complain
+@notDecimal
+
+*** check for 8-bit registers
+check8bit	name
+	lda OldPRegister
+	and #$0030
+	beq @not8bit	
+	lda #msg8bit
+	jsr complain
+@not8bit
+
+*** check the caller's identity and attributes
+checkCallerAddr	name
+	lda where+2
+	ldx where
+	jsr FindAddressInfo
+	sta theCallerID
+	stx theCallerAttr
+	bcs @callerInvalid
+
+	tay
+	beq @callerIsROM
+
+	txa
+	bmi @callerSafe
+	and #$4300
+	cmp #$4000
+	beq @callerSafe
+	lda #msgCallerAttrUnsafe
+	jsr complain
+@callerSafe
+
+	lda theCallerID
+	and #$F000
+	cmp #$3000	;OS is okay
+	beq @callerDone
+	cmp #$4000	;Toolbox is okay
+	beq @callerDone
+	cmp #$7000	;Loader is okay
+	beq @callerDone
+	cmp #$9000	;Tool Locator is okay
+	beq @callerDone
+
+	lda theCallerID
+	jsr myStatusID	;in=A, out=carry
+	bcc @callerDone
+	lda #msgCalledFromBadID
+	jsr complain
+	bra @callerDone
+
+@callerInvalid	lda #msgBadCallerAddr
+	jsr complain
+@callerIsROM
+@callerDone
+
+***  validate the stack
+checkTheStack	name
+	lda #-1
+	sta stackLimit
+
+	lda #0
+	ldx TheStackPtr
+	jsr FindAddressInfo	;return A=ID, X=attributes
+	bcs @badStack
+
+	lda topOfBlock
+	sta stackLimit	;(stackLimit is actually more complicated)
+
+	txa	;stack block attributes
+	bmi @stackDone	;locked is okay
+	and #$4300
+	cmp #$4000	;if unlocked, must be fixed+nonpurgeable
+	beq @stackDone
+
+	lda #msgUnsafeStack
+	jsr complain
+	bra @stackDone
+
+@badStack	lda #msgBadStack
+	jsr complain
+@stackDone
+
+checkHousekeeping	name
+	lda func
+	tax
+	and #$ff00
+	cmp #$0900
+	bcs @housekeepingDone
+
+	txa
+	cmp #$071d	;ACEInfo is okay
+	beq @housekeepingDone
+
+	and #$ff00
+	cmp #$0700
+	bcc @notReserved
+
+	lda #msgReserved78
+	jsr complain
+	brl ok
+
+@notReserved
+
+*  check for bootInit and Reset functions
+@chkBootInitReset	cmp #$0100	;xxxBootInit
+	beq @system
+	cmp #$0500	;xxxReset
+	beq @system
+@isActive0	brl isActive	;StartUp, ShutDown, Version, Status
+
+@system	jsr CallerMustBeSystem
+	bcc @isActive0
+
+	lda #msgBootInitReset
+	jsr complain
+	brl ok
+@housekeepingDone
+
+*** check for function zero & out-of-range functions
+checkFuncZero	name
+	lda func
+	and #$ff00
+	cmp #$0600	;xxxStatus is okay
+	beq toIsActive
+	cmp #$0400	;xxxVersion is okay
+	beq toIsActive
+	cmp #$0100	;xxxBootInit is okay
+	beq toIsActive
+	cmp #$0500
+	bne notAlwaysAvail	;xxxReset is okay
+toIsActive	brl isActive
+notAlwaysAvail
+
+*** the following functions are "okay" even if their toolsets are inactive
+allowSpecial	name
+	lda func
+	ldx #allowInactiveEnd-allowWhileInactive-2
+@scanSpecial	cmp allowWhileInactive,x
+	beq isActive
+	dex
+	dex
+	bpl @scanSpecial
+
+	lda func
+	and #$ff00
+	beq @badfunc
+* validate function number
+	lda func
+	jsr CountToolFuncs
+	pha
+	lda func
+	xba
+	and #$00ff
+	cmp 1,s
+	pla
+	bcc @notBadFunc
+@badfunc	lda #msgBadFunction	;function is zero of too big
+	jsr complain
+	bra ok
+@notBadFunc
+
+*** check tool's status
+checkToolStatus	name
+	ldx func
+	txa
+	and #$00ff
+	cmp #$0005	;DeskM sez it's off when it's a little busy
+	beq isActive
+
+	cmp #$0008	;Sound tools
+	bne @notSound
+	jsr GetToolWAP	;A=8, returns A=X=WAP, Z flag conditioned
+	bne isActive
+	bra @notActive
+
+@notSound	ora #$0600	;make an xxxStatus call
+	tax
+	pea 0	;pre-zero the result space
+	jsl $e10000
+	pla
+	bne isActive
+
+@notActive	lda #msgNotActive
+	jsr complain
+	bra ok
+isActive
+
+	jsr DoScriptedTChecks
+
+ok	dec active
+
+nocheck	lda func
+	jsr NotifyCacheOfFunc  ;flush handle cache if necessary
+
+	pla
+	plx
+	plb
+	rts
+
+*
+* The following functions are allowed even if their toolsets are
+* inactive or missing.
+*
+allowWhileInactive	dc.w $0a04	;GrafOn
+	dc.w $0b04	;GrafOff
+	dc.w $0a06	;GetNextEvent
+	dc.w $0b06	;EventAvail
+	dc.w $6b0e	;HandleDiskInsert kludge (for WindStartUp)
+	dc.w $1111	;LGetPathname (for Nifty List)
+	dc.w $2211	;LGetPathname2 (for Nifty List)
+	dc.w $0c12	;WaitCursor
+allowInactiveEnd
+
+**************************************************************
+*
+* DoScriptedChecks
+*
+* Input:
+*   func, where, theCallerID, theCallerAttr,
+*   stackLimit, theStackPtr
+*
+**************************************************************
+DoScriptedTChecks	name
+	jsr GetTScriptPtr
+@interpret	jsr getScriptWord
+	beq @done
+	jsr @callScript
+	bra @interpret
+
+@callScript	dec a
+	pha
+@done	rts
+
+**************************************************************
+*
+* GetTScriptPtr
+*
+* Input: func
+*
+* Output: <tScript
+*
+**************************************************************
+GetTScriptPtr	name
+	lda #^nullScript
+	sta <tScript+2
+	lda func
+	and #$00ff
+	beq @null
+	asl a
+	tax
+	cpx ToolsetScripts
+	bcs @null
+	lda ToolsetScripts,x
+	beq @null
+	sta <tScript
+
+	lda func
+	and #$ff00
+	beq @null
+	xba
+	asl a
+	tay
+	cmp [tScript]
+	bcs @null
+	lda [tScript],y
+	beq @null
+	sta <tScript
+	rts
+
+@null	lda #nullScript
+	sta <tScript
+	rts
+
+*-------------------------------------------------------------
+*
+* getScriptWord -- fetch word into A
+*
+*-------------------------------------------------------------
+getScriptWord	name
+	lda [tScript]
+	tax
+	lda tScript
+	clc
+	adc #2
+	sta tScript
+	bcc @1
+	inc tScript+2
+@1	txa
+	rts
+	
+*-------------------------------------------------------------
+*
+* getScriptLong -- fetch long into AX
+*
+*-------------------------------------------------------------
+getScriptLong	name
+	jsr getScriptWord
+	pha
+	jsr getScriptWord
+	plx
+	rts
+
+*-------------------------------------------------------------
+*
+* getStackWord
+*
+* Input:  A = stack offset (1=shallowest parameter)
+*
+* @@@ Should check that we don't extend past the
+*     stack limit
+*
+*-------------------------------------------------------------
+getStackWord	name
+	clc
+	adc TheStackPtr
+	tax
+	lda >6,x
+	rts
+
+*-------------------------------------------------------------
+*
+* getStackLong
+*
+* Input:  A = stack offset (1=shallowest parameter)
+*
+* @@@ Should check that we don't extend past the
+*     stack limit
+*
+*-------------------------------------------------------------
+getStackLong	name
+	clc
+	adc TheStackPtr
+	tax
+	lda >8,x
+	sta <tScratch+2
+	lda >6,x
+	sta <tScratch
+	rts
+
+
+*-------------------------------------------------------------
+*-------------------------------------------------------------
+*
+* doTLShutDown -- make sure other tools are already stopped
+*
+*-------------------------------------------------------------
+doTLShutDown	name
+	ldx #tlShutTableEnd-tlShutTable-1
+@checkGone	phx
+	lda tlShutTable,x
+	and #$00ff
+	pha
+
+	pha
+	pha
+	pha
+	_HexIt
+	pla
+	pla
+	sta toolNumStillStarted
+
+	pla
+	ora #$0600
+	tax
+	pea 0
+	jsl $e10000
+	pla
+	beq @isGone
+
+	lda #msgStillStarted
+	jsr complain
+
+@isGone	plx
+	dex
+	bpl @checkGone
+	rts
+
+tlShutTable	dc.b $04,$06,$08,$0A	;QD, EM, Sound, SANE
+	dc.b $0E,$0F,$10,$12	;Window, Menu, Control, QDAux
+	dc.b $13,$14,$15,$17	;Print, LE, Dialog, StdFile
+	dc.b $19,$1A,$1B,$1D	;NoteSynth, NoteSeq, Font, ACE
+	dc.b $20,$21,$22,$23	;midi, text edit, MidiSynth
+	dc.b $25,$26		;animation, mediaCtl
+tlShutTableEnd
+
+*-------------------------------------------------------------
+*
+* dpParm
+*
+* Eats:  offset (word), dp size (word)
+*
+* Checks that the DP is allocated, page-aligned, required-
+* page-aligned.
+*
+*-------------------------------------------------------------
+dpParm	name
+	jsr getScriptWord
+	jsr getStackWord
+
+	pha
+	and #$00ff
+	beq @isAligned
+	lda #msgDPNotAligned
+	jsr complain
+@isAligned	pla
+
+	tax
+	lda #0
+	jsr FindAddressInfo
+	bcc @alloc
+	lda #msgDPNotAlloc
+	jsr complain
+	bra @sizeCheck
+
+@alloc	txa
+	bmi @safe
+	and #$4300
+	cmp #$4000
+	beq @safe
+	pha
+	lda #msgDPUnsafe
+	jsr complain
+	pla
+@safe	and #4
+	bne @aligned
+	lda #msgDPHandNotAligned
+	jsr complain
+@aligned
+
+@sizeCheck	lda startOfBlock
+	sta <tScratch
+	lda startOfBlock+2
+	sta <tScratch+2
+
+	jsr getScriptWord
+	jsr checkSpaceInBlock  ;tScratch=base addr, A=bytes needed
+	bcc @ok
+	lda #msgDPCrossesBlock
+	jsr complain
+@ok	rts
+
+msgDPNotAlloc	dc.b '** WARNING: Direct Page area is not allocated **',0
+msgDPCrossesBlock	dc.b '** WARNING: Direct Page area extends past block **',0
+msgDPUnsafe	dc.b '** WARNING: Direct Page area is moveable or purgeable **',0
+msgDPNotAligned	dc.b '** WARNING: Direct Page area is not page-aligned **',0
+msgDPHandNotAligned	dc.b '** Caution: Direct Page handle is not forced page-aligned **',0
+
+*-------------------------------------------------------------
+*
+* needTool
+*
+* Eats:  toolset (word)
+*
+*-------------------------------------------------------------
+needTool	name
+	jsr getScriptWord
+	sta theTNum
+	ora #$0600	;build xxxStatus function
+	tax
+	pea 0
+	jsl $e10000
+	pla
+	bne @ok
+	pha
+	pha
+	lda theTNum
+	pha
+	_HexIt
+	pla
+	sta msgTNum
+	pla
+	lda #msgNeedTool
+	jsr complain
+@ok	rts
+
+theTNum	dc.w 0
+
+msgNeedTool	dc.b '** Required tool set not started: '
+msgTNum	dc.b 'xx **',0
+
+*-------------------------------------------------------------
+*
+* validPort -- Complain if there is not a valid port set.
+*
+*-------------------------------------------------------------
+validPort	name
+	jsr getport	;into yx
+	sty tScratch+2
+	stx tScratch
+	jsr checkPort	;make sure tScratch is a valid port
+	bcc @ok
+	lda #msgBadPortSet
+	jsr complain
+@ok	rts
+
+msgBadPortSet	dc.b '** WARNING: The current QD port is invalid **',0
+
+
+*-------------------------------------------------------------
+*
+* getport -- return QD port in YX (nil if QD not started)
+*
+* Port is stored at $24 on QD direct page
+*
+*-------------------------------------------------------------
+getport	lda #4	;QD
+	jsr GetToolWAP
+	txy
+	beq @exit
+	lda >$000024+2,x
+	tay
+	lda >$000024,x
+	tax	;return port in YX
+@exit	rts
+
+*-------------------------------------------------------------
+*
+* GetToolWAP
+*
+* Input:  tool number in A
+* Output: low word of WAP in A and X
+*
+*-------------------------------------------------------------
+GetToolWAP	name
+	asl a
+	asl a
+	tay	;y = tool*4
+	phd
+	lda >$e103c8+2
+	pha
+	lda >$e103c8
+	pha
+	tsc
+	tcd
+	lda [1],y
+	plx
+	plx
+	pld
+	tax
+	rts
+
+*-------------------------------------------------------------
+*
+* CountToolFuncs
+*
+* Input: tool number in low byte of A (assumed valid tool #)
+* Output: function-count-plus-one in A
+*
+*-------------------------------------------------------------
+CountToolFuncs	name
+	and #$00ff
+	asl a
+	asl a
+	tay
+	phd
+	lda >$e103c0+2
+	pha
+	lda >$e103c0	;get system TPT
+	pha
+	tsc
+	tcd
+@ptr	equ 1
+	lda [<@ptr],y
+	tax
+	iny
+	iny
+	lda [<@ptr],y
+	sta <@ptr+2
+	stx <@ptr	;looked up FPT in the TPT
+	lda [@ptr]	;grab function-count-plus-one
+	plx
+	plx
+	pld
+	rts
+
+*-------------------------------------------------------------
+*
+* coordParm
+*
+* Eats: offset (word)
+*
+*-------------------------------------------------------------
+coordParm	name
+	jsr getScriptWord
+	jsr getStackWord
+	clc
+	adc #$4000
+	bpl @ok
+	lda #msgBadCoord
+	jsr complain
+@ok	rts
+
+msgBadCoord	dc.b '** WARNING: Bad QD coordinate (out of range) **',0
+
+*-------------------------------------------------------------
+*
+* rgnParm
+*
+* Eats: offset (word)
+*
+*-------------------------------------------------------------
+rgnParm	name
+	jsr getScriptWord
+	jsr getStackLong
+	jsr checkRegion
+;	bcc @ok
+;	lda #msgBadRgn
+;	jsr complain
+@ok	rts
+
+;msgBadRgn	dc.b '** Warning: Bad region handle parameter **',0
+
+*-------------------------------------------------------------
+*
+* validateRegion
+*
+* Input: tScratch should be a region handle
+*
+* Output: SEC if we complained
+*
+*-------------------------------------------------------------
+checkRegion	name
+	lda tScratch+1
+	bne @notNIL
+	lda #msgRegionNIL
+	jsr complain
+	bra @wasBad
+@notNIL	cmp #$fe10	;ROM 1 uses $FE/100C wide-open region
+	beq @ok
+	cmp #$fe0d	;ROM 3 uses $FE/0DF5 wide-open region
+	beq @ok
+
+*** deref region handle and make sure it's not already disposed
+	ldy #2
+	lda [<tScratch],y
+	sta <tTemp+2
+	lda [<tScratch]
+	sta <tTemp
+
+	lda <tTemp+1
+	bne @notGone
+	lda #msgRegionGone
+	jsr complain
+	bra @wasBad
+@notGone
+
+*** Special-case:  Allow a fake handle to a rectangular region on the stack
+	lda tScratch+2
+	bne @notFakeVis
+
+	lda [<tTemp]
+	cmp #10
+	beq @ok	;rectangular
+@notFakeVis
+
+; check region's size word against the handle size
+
+	ldy #8	;offset to handle size
+	lda [<tScratch],y	;handle size
+	cmp [<tTemp]	;check region size word
+	bne @corrupt
+
+; check region's bounds rect (address = tTemp+2)
+
+	pei <tScratch+2
+	pei <tScratch
+	clc
+	lda <tTemp
+	adc #2
+	sta <tScratch
+	lda <tTemp+2
+	adc #0
+	sta <tScratch+2
+	jsr checkRectangle	;in = tScratch, out=sec
+	pla
+	sta tScratch
+	pla
+	sta tScratch+2
+	bcs @corrupt
+
+@ok	clc
+	rts
+
+@corrupt	lda #msgRegionCorrupt
+	jsr complain
+@wasBad	sec
+	rts
+
+msgRegionNIL	dc.b '** WARNING: Region parameter is NIL **',0
+;msgRegionBadHand	dc.b '** WARNING: Region handle is invalid **',0
+msgRegionCorrupt	dc.b '** WARNING: Region data seems corrupt **',0
+msgRegionGone	dc.b '** WARNING: This region seems to be disposed! **',0
+
+*
+* checkRegionAX -- preserves tScratch
+*
+checkRegionAX	name
+	pei tScratch+2
+	pei tScratch
+	sta tScratch+2
+	stx tScratch
+	jsr checkRegion
+	pla
+	sta tScratch
+	pla
+	sta tScratch+2
+	rts
+
+*-------------------------------------------------------------
+*
+* portParm
+*
+* Eats: offset (word)
+*
+*-------------------------------------------------------------
+portParm	name
+	jsr getScriptWord
+	jsr getStackLong
+	jsr checkPort
+	bcc @ok
+	lda #msgBadPortParm
+	jsr complain
+@ok	rts
+
+msgBadPortParm	dc.b '** WARNING: Invalid port parameter **',0
+
+*-------------------------------------------------------------
+*
+* checkPort
+*
+* Input:  tScratch
+* Output: CLC if port is good
+*
+*-------------------------------------------------------------
+checkPort	name
+	lda tScratch+1
+	beq @bad
+
+* @@@ validate locInfo:  portSCB, pixmapptr, rowBytes is multiple of 8, portRect valid
+
+* @@@ memory must be allocated-safe for $AA bytes
+;	@@@
+
+*** region handles must be valid (clip, vis)
+	ldy #$18	;clipRgn offset
+	lda [<tScratch],y
+	tax
+	iny
+	iny
+	lda [<tScratch],y
+	jsr checkRegionAX
+	bcc @ok
+	lda #msgClipHandBad
+	jsr complain
+	sec
+	rts
+
+@ok	ldy #$1C	;visRgn offset
+	lda [<tScratch],y
+	tax
+	iny
+	iny
+	lda [<tScratch],y
+	jsr checkRegionAX
+	bcc @good
+	lda #msgVisHandBad
+	jsr complain
+@bad	sec
+	rts
+
+@good	clc
+	rts
+
+msgClipHandBad	dc.b '** WARNING: Port''s clipRgn handle is bad **',0
+msgVisHandBad	dc.b '** WARNING: Port''s visRgn handle is bad **',0
+
+*-------------------------------------------------------------
+*
+* pointParm
+*
+* Eats: offset (word)
+*
+*-------------------------------------------------------------
+pointParm	name
+	jsr getScriptWord
+	jsr getStackLong
+	lda [<tScratch]
+	clc
+	adc #$4000
+	bmi @badPoint
+	ldy #2
+	lda [<tScratch],y
+	clc
+	adc #$4000
+	bpl @ok
+@badPoint	lda #msgBadPoint
+	jsr complain
+@ok	rts
+
+msgBadPoint	dc.b '** Warning: Bad coordinate in QD point parm **',9
+
+*-------------------------------------------------------------
+*
+* rectParm
+*
+* Eats: offset (word)
+*
+*-------------------------------------------------------------
+rectParm	name
+	jsr getScriptWord
+	jsr getStackLong
+	pei <tScratch+2
+	pei <tScratch
+	jsr ValidateLockedPtr
+	lda #8
+	jsr checkSpaceInBlock  ;need 8 bytes!
+	bcc @space
+	lda #msgRectCrossesBlock
+	jsr complain
+@space	jsr checkRectangle
+	bcc @ok
+	lda #msgBadRect
+	jsr complain
+@ok	rts
+
+msgBadRect	dc.b '** WARNING: Bad QD rectangle (coordinate out of range) **',0
+msgRectCrossesBlock	dc.b '** WARNING: Rectangle crosses block boundary **',0
+
+*
+* checkRectangle -- validate rect at tScratch (return CLC=ok)
+*
+* For each rectangle coordinate, the valid values are from
+* -16384 ($C000) to 16383 ($3FFF).
+*
+* Add $4000 --> valid range is $0000 to $7FFF.
+*
+checkRectangle	name
+	ldy #6
+@chkCoord	lda [tScratch],y
+	clc
+	adc #$4000
+	bmi @bad
+	dey
+	dey
+	bpl @chkCoord
+	clc
+	rts
+@bad	sec
+	rts
+
+*-------------------------------------------------------------
+*
+* anyHandle
+*
+* Eats:  Offset (word)
+*
+*-------------------------------------------------------------
+anyHandle	name
+	jsr getScriptWord	;offset
+	jsr getStackLong	;-->tScratch
+	pei <tScratch+2
+	pei <tScratch
+	jsr ValidateHandle
+	rts
+
+*-------------------------------------------------------------
+*
+* usedHandle
+*
+* Eats:  Offset (word)
+*
+*-------------------------------------------------------------
+usedHandle	name
+	jsr getScriptWord	;offset
+	jsr getStackLong	;-->tScratch
+;@@@
+	rts
+
+*-------------------------------------------------------------
+*
+* validPtr
+*
+* Eats:  Offset (word)
+*
+*-------------------------------------------------------------
+validPtr	name
+	jsr getScriptWord
+	jsr getStackLong
+
+	pei <tScratch+2
+	pei <tScratch
+	jsr ValidatePtr
+	rts
+
+*-------------------------------------------------------------
+*
+* validSizedPtr
+*
+* Eats:  Offset (word)
+*        Size (word)
+*
+*-------------------------------------------------------------
+validSizedPtr	name
+	jsr validPtr	;leaves ptr in tScratch
+	jsr getScriptWord	;--> A
+;	sta @sizeNeeded
+	jsr checkSpaceInBlock
+	bcc vspOK
+complainBadSizedPtr	lda #msgBadSizedPtr
+	jsr complain
+vspOK	rts
+
+msgBadSizedPtr	dc.b '** WARNING: Structure crosses block boundary **',0
+
+;@sizeNeeded	dc.w 0	;self-modify the message!
+
+
+*-------------------------------------------------------------
+*
+* handParmSizeParm
+*
+* Eats:  Offset to handle parameter to tool call
+*        Offset to size parameter (long) to tool call
+*
+*-------------------------------------------------------------
+handParmSizeParm	name
+	jsr getScriptWord	;offset to handle parameter
+	jsr getStackLong	;handle-->tScratch
+	lda <tScratch+2
+	ldx <tScratch
+	sta <tTemp+2
+	stx <tTemp	;tTemp = handle
+
+	jsr getScriptWord	;offset to size parameter
+	jsr getStackLong	;size-->tScratch
+	lda <tScratch+2
+	ldy #8+2	;handle size
+	cmp [<tTemp],y
+	bne @compared
+	dey
+	dey
+	lda <tScratch
+	cmp [<tTemp],y
+@compared	beq @ok
+	bcc @ok
+	lda #msgHandleTooSmall
+	jsr complain
+@ok	rts
+
+msgHandleTooSmall	dc.b '** WARNING: Handle is not big enough **',0
+
+*-------------------------------------------------------------
+*
+* ptrParmSizeParm
+*
+* Eats:  Offset to pointer parameter to tool call
+*        Offset to size parameter (long) to tool call
+*
+*-------------------------------------------------------------
+ptrParmSizeParm	name
+	jsr getScriptWord	;offset to pointer
+	jsr getStackLong	;pointer-->tScratch
+	lda <tScratch+2
+	ldx <tScratch
+	sta <tTemp+2
+	stx <tTemp	;tTemp = pointer
+
+	jsr getScriptWord	;offset to size
+	jsr getStackLong	;size-->tScratch
+
+	pha
+	pha	;space for myFindHandle
+	lda <tTemp+2
+	ldx <tTemp
+	jsr myFindHandle
+	pla
+	plx
+	bcs @ok	;if it's not allocated, assume we already caught it
+
+*** compute topOfBlock = pointer + size
+	phx
+	pha
+	phd
+	tsc
+	tcd
+	clc
+	lda [3]
+	ldy #8	;offset to handle size
+	adc [3],y
+	sta topOfBlock
+	ldy #2
+	lda [3],y
+	ldy #10	;offset to handle size, high
+	adc [3],y
+	sta topOfBlock+2
+	bcc @topOK
+	dec topOfBlock
+	dec topOfBlock+2	;force to $ffffffff (for ROM addresses)
+@topOK	pld
+	pla
+	pla
+
+*** If tTemp(ptr)+tScratch(size) > topOfBlock, we have a problem
+	clc
+	lda <tTemp
+	adc <tScratch
+	tax
+	lda <tTemp+2
+	adc <tScratch+2
+	cmp topOfBlock+2
+	bne @compared
+	cpx topOfBlock
+@compared	beq @ok
+	bcc @ok
+	brl complainBadSizedPtr
+@ok	rts
+
+*-------------------------------------------------------------
+*
+* lockedPtr
+*
+* Eats:  Offset (word)
+*
+*-------------------------------------------------------------
+lockedPtr	name
+	jsr getScriptWord	;offset
+	jsr getStackLong	;-->tScratch
+	pei <tScratch+2
+	pei <tScratch
+	jsr ValidateLockedPtr
+	rts
+
+*-------------------------------------------------------------
+*
+* lockedSizedPtr
+*
+* Eats:  Offset (word)
+*        Size (word)
+*
+*-------------------------------------------------------------
+lockedSizedPtr	name
+	jsr lockedPtr
+	jsr getScriptWord	;-->A
+;	sta sizeNeeded
+	jsr checkSpaceInBlock
+	bcc @ok
+	brl ComplainBadSizedPtr
+@ok	rts
+
+*-------------------------------------------------------------
+*
+* queueEntry
+*
+* Eats:  Offset (word)
+*
+*-------------------------------------------------------------
+queueEntry	name
+	jsr getScriptWord	;offset
+	jsr getStackLong	;-->tScratch
+	pei <tScratch+2
+	pei <tScratch
+	jsr ValidateLockedPtr
+	ldy #6
+	lda [<tScratch],y
+	cmp #$A55A
+	beq @ok
+	lda #badQueueEntry
+	jsr complain
+@ok	rts
+
+badQueueEntry	dc.b '** Warning: Bad signature in queue header **',0
+
+*-------------------------------------------------------------
+*
+* reservedBits
+*
+* Eats:  Offset (word), Mask (word)
+*
+*-------------------------------------------------------------
+reservedBits	name
+	jsr getScriptWord	;offset
+	jsr getStackWord	;-->A
+	sta <tScratch
+	jsr getScriptWord	;mask
+	and <tScratch
+	beq @ok
+	lda #msgReservedBitsW
+	jsr complain
+@ok	rts
+
+msgReservedBitsW	dc.b '** Warning: Reserved bits set in word parameter **',0
+
+*-------------------------------------------------------------
+*
+* longReservedBits
+*
+* Eats:  Offset (word), Mask (long)
+*
+*-------------------------------------------------------------
+longReservedBits	name
+	jsr getScriptWord
+	jsr getStackLong	;-->tScratch
+	jsr getScriptLong	;-->AX
+	and <tScratch+2
+	bne @reserved
+	txa
+	and <tScratch
+	bne @reserved
+	rts
+
+@reserved	lda #msgReservedBits
+	jsr complain
+	rts
+
+msgReservedBits	dc.b '** Warning: Reserved bits set in long parameter **',0
+
+*-------------------------------------------------------------
+*
+* notDeskAcc
+*
+* Eats:  nothing
+*
+*-------------------------------------------------------------
+notDeskAcc	name
+	lda theCallerID
+	and #$f000
+	cmp #$5000
+	bne @fine
+	lda #msgNotDA
+	jsr complain
+@fine	rts
+
+msgNotDA	dc.b '** Warning: A Desk Accessory should not make this call **',0
+
+*-------------------------------------------------------------
+*
+* notApp
+*
+* Eats:  nothing
+*
+*-------------------------------------------------------------
+notApp	name
+	lda theCallerID
+	and #$f000
+	cmp #$1000
+	bne @fine
+	lda #msgNotApp
+	jsr complain
+@fine	rts
+
+msgNotApp	dc.b '** Caution: An application should not make this call **',0
+
+*-------------------------------------------------------------
+*
+* systemOnly
+*
+* Eats:  nothing
+*
+*-------------------------------------------------------------
+systemOnly	name
+	lda theCallerID
+	and #$f000
+	beq @ok
+	cmp #$3000
+	beq @ok
+	cmp #$4000
+	beq @ok
+;;;	cmp -- allow Tool.Setup and TSx
+	lda #msgSysOnly
+	jsr complain
+@ok	rts
+
+msgSysOnly	dc.b '** Caution: Only the system should make this call **',0
+
+*-------------------------------------------------------------
+*
+* idParm
+*
+* Eats: offset (word)
+*
+*-------------------------------------------------------------
+idParm	name
+	jsr getScriptWord
+	jsr getStackWord
+	sta tScratch
+	tax
+	and #$00ff
+	beq @invalid
+	txa
+	and #$f000
+	cmp #$B000
+	bcs @invalid
+	rts
+
+@invalid	lda #msgInvalidID
+	jsr complain
+	rts
+
+msgInvalidID	dc.b '** Caution: Invalid UserID parameter **',0
+
+*-------------------------------------------------------------
+*
+* idOtherParm
+*
+* Eats: offset (word)
+*
+* Validates a memory ID and ensures that the ID does not refer
+* to the block the caller is in (for DisposeAll, etc).
+*
+*-------------------------------------------------------------
+idOtherParm	name
+	jsr idParm
+	lda theCallerID
+	cmp <tScratch
+	beq @callerID
+	and #$f0ff
+	cmp <tScratch
+	beq @callerID
+	rts
+@callerID	lda #msgSelfID
+	jsr complain
+	rts
+
+msgSelfID	dc.b '** Warning: UserID refers to the calling block **',0
+
+*-------------------------------------------------------------
+*
+* longResult
+*
+* Eats:  offset (word)
+*
+* Validates 4 bytes of result space on the stack.
+*
+*-------------------------------------------------------------
+longResult	jsr getScriptWord	;offset
+	jsr getStackLong	;verifies no stack crossing
+	rts
+
+*-------------------------------------------------------------
+*
+* wongResult
+*
+* Eats:  offset (word)
+*
+* Validates 2 bytes of result space on the stack.
+*
+*-------------------------------------------------------------
+wordResult	jsr getScriptWord	;offset
+	jsr getStackWord	;verifies no stack crossing
+	rts
+
+*-------------------------------------------------------------
+*
+* attrParm
+*
+* Eats:  offset (word)
+*
+* Verifies that a memory manager Attributes parameter is good.
+*
+*-------------------------------------------------------------
+attrParm	jsr getScriptWord	;offset
+	jsr getStackWord
+	and #$3CE0
+	beq @ok
+	lda #msgBadAttr
+	jsr complain
+@ok	rts
+
+msgBadAttr	dc.b '** Warning: Attributes parameter has extra bits set **',0
+
+*-------------------------------------------------------------
+*-------------------------------------------------------------
+nullScript	dc.w 0
+
+ToolsetScripts	dc.w xToolsetScripts-ToolsetScripts
+	dc.w TLScripts	;1 = Tool Locator
+	dc.w MMScripts	;2 = Memory Manager
+	dc.w MTScripts	;3 = Misc Tools
+	dc.w QDScripts	;4 = QuickDraw II
+	dc.w DeskScripts	;5 = Desk Manager
+	dc.w EMScripts	;6 = Event Manager
+	dc.w SchedScripts	;7 = Scheduler
+	dc.w SoundScripts	;8 = Sound tools
+	dc.w ADBScripts	;9 = ADB
+	dc.w SANEScripts	;A = SANE
+	dc.w IMScripts	;B = Integer Math
+	dc.w TextScripts	;C = Text Tools
+	dc.w 0	;D = internal
+	dc.w WindScripts	;E = Window Manager
+	dc.w MenuScripts	;F = Menu Manager
+	dc.w CtrlScripts	;10 = Control Manager
+	dc.w LoaderScripts	;11 = Loader
+	dc.w QDAuxScripts	;12 = QD Aux
+	dc.w PMScripts	;13 = Print Manager
+	dc.w LEScripts	;14 = Line Edit
+	dc.w DialogScripts	;15 = Dialog Manager
+	dc.w ScrapScripts	;16 = Scrap Manager
+	dc.w StdFileScripts	;17 = Standard File
+	dc.w 0	;18 = reserved
+	dc.w NSynthScripts	;19 = Note Synthesizer
+	dc.w NSeqScripts	;1A = Note Sequencer
+	dc.w FontScripts	;1B = Font Manager
+	dc.w ListScripts	;1C = List Manager
+	dc.w ACEScripts	;1D = ACE
+	dc.w RMScripts	;1E = Resource Manager
+	dc.w 0	;1F = reserved
+	dc.w MIDIScripts	;20 = MIDI
+	dc.w VideoScripts	;21 = Video Overlay
+	dc.w TEScripts	;22 = Text Edit
+	dc.w MSynthScripts	;23 = MIDI Synth
+	dc.w 0	;24 = reserved
+	dc.w AnimScripts	;25 = Animation
+	dc.w MediaScripts	;26 = Media Control
+xToolsetScripts
+
+*-------------------------------------------------------------
+TLScripts	dc.w xTLScripts-TLScripts
+	dc.w 0	;$0101 TLBootInit
+	dc.w sNotDeskAcc	;$0201 !D:~TLStartUp()
+	dc.w sNotDeskAcc	;$0301 !D:~TLShutDown()
+	dc.w 0	;$0401 TLVersion
+	dc.w 0	;$0501 TLReset
+	dc.w 0	;$0601 TLStatus
+	dc.w 0	;$0701 --
+	dc.w 0	;$0801 --
+	dc.w sGetTSPtr	;$0901 :2>FF,2,4rs~GetTSPtr(SysFlg,TS#):@FPT
+	dc.w sSetTSPtr	;$0A01 :4@L,2>FF,2~SetTSPtr(SysFlg,TS#,@FPT)
+	dc.w sGetFuncPtr	;$0B01 :2,2,4rs~GetFuncPtr(SysFlg,Func):@Func
+	dc.w sGetWAP	;$0C01 :2>FF,2,4rs~GetWAP(SysFlg,TS#):@WAP
+	dc.w sSetWAP	;$0D01 :4,2>FF,2~SetWAP(SysFlg,TS#,@WAP)
+	dc.w sLoadTools	;$0E01 :4@L6~LoadTools(@ToolTable)
+	dc.w sLoadOneTool	;$0F01 :2,2>FF~LoadOneTool(TS#,MinVers)
+	dc.w sUnloadOneTool	;$1001 :2>FF=0~UnloadOneTool(TS#)
+	dc.w sTLMountVol	;$1101 :4PS,4PS,4PS,4PS,2qc,2qc,2rs~TLMountVolume(X,Y,@L1,@L2,@B1,@B2):Btn#
+	dc.w sTLTextMountV	;$1201 :4PS,4PS,4PS,4PS,2rs~TLTextMountVolume(@L1,@L2,@B1,@B2):Btn#
+	dc.w sLongResult	;$1301 :4rs~SaveTextState():StateH
+	dc.w sRestTextState	;$1401 :4H~RestoreTextState(StateH)
+	dc.w sMessageCenter	;$1501 :4H,2=0,2=0>2~MessageCenter(Action,Type,MsgH)
+	dc.w sNotApp	;$1601 !A:~SetDefaultTPT()
+	dc.w sMessageByName	;$1701 :4WS,2,2rs,2rs~MessageByName(CreateF,@inpRec):Created,Type
+	dc.w sStartUpTools	;$1801 :4RF,2RB@@@,2id,4rs~StartUpTools(MemID,ssDesc,ssRef/4):ssRef/4
+	dc.w sShutDownTools	;$1901 :4RF,2RB@@@~ShutDownTools(ssDesc,ssRef/4)
+	dc.w sGetMsgHandle	;$1A01 :4,2RB@@@,4rs~GetMsgHandle(Flags,MsgRef/4):H
+	dc.w sAcceptReqs	;$1B01 :40@L,2id,4PS~AcceptRequests(@NameStr,UserID,@ReqProc)
+	dc.w sSendRequest	;$1C01 :40@L2,4,4,2,2~SendRequest(ReqCode,How,Target/4,@In,@Out)
+xTLScripts
+
+sTLShutDown	dc.w notDeskAcc
+	dc.w doTLShutDown
+	dc.w 0
+
+sNotDeskAcc	dc.w notDeskAcc
+	dc.w 0
+
+sNotApp	dc.w notApp
+	dc.w 0
+
+sGetTSPtr
+sSetTSPtr
+sGetFuncPtr
+sGetWAP
+sSetWAP
+sLoadTools
+sLoadOneTool
+sUnloadOneTool
+sTLMountVol
+sTLTextMountV	dc.w 0
+sRestTextState	dc.w 0
+sMessageCenter
+sMessageByName
+sStartUpTools
+sShutDownTools
+sGetMsgHandle
+sAcceptReqs
+sSendRequest
+	dc.w 0
+
+*-------------------------------------------------------------
+MMScripts	dc.w xMMScripts-MMScripts
+	dc.w 0	;$0102 MMBootInit
+	dc.w sWordResult	;$0202 MMStartUp
+	dc.w sMemID	;$0302 :2id~MMShutDown(MemID)
+	dc.w sWordResult	;$0402 MMVersion
+	dc.w 0	;$0502 MMReset
+	dc.w sWordResult	;$0602 MMStatus
+	dc.w 0	;$0702 --
+	dc.w 0	;$0802 --
+	dc.w sNewHandle	;$0902 :4,2RB@@@,2id,4>FFFFFF~NewHandle(Size/4,MemID,Attr,@loc):H
+	dc.w 0	;$0A02 :4AH,4,4RB@@@,2id,4>FFFFFF~ReAllocHandle(Size/4,MemID,Attr,@loc,H)
+	dc.w sAnyHandle	;$0B02 :4AH~RestoreHandle(H)
+	dc.w sQueueEntry	;$0C02 :4@L0A~AddToOOMQueue(@header)
+	dc.w sQueueEntry	;$0D02 :4@L0A~RemoveFromOOMQueue(@header)
+	dc.w 0	;$0E02 --
+	dc.w 0	;$0F02 --
+	dc.w sAnyHandle	;$1002 :4AH~DisposeHandle(H)
+	dc.w sOtherMemID	;$1102 :2~DisposeAll(MemID)
+	dc.w sUsedHandle	;$1202 :4H~PurgeHandle(H)
+	dc.w sOtherMemID	;$1302 :2~PurgeAll(MemID) ;@@@ should allow ID=0
+	dc.w 0	;$1402 --
+	dc.w 0	;$1502 --
+	dc.w 0	;$1602 --
+	dc.w 0	;$1702 --
+	dc.w sGetHandleSize	;$1802 :4H,4rs~GetHandleSize(H):Size/4
+	dc.w sSetHandleSize	;$1902 :4AH???,4rs~SetHandleSize(Size/4,H)
+	dc.w sFindHandle	;$1A02 :4,4rs~FindHandle(@byte):H
+	dc.w sLongResult	;$1B02 :4rs~FreeMem():FreeBytes/4
+	dc.w sLongResult	;$1C02 :4rs~MaxBlock():Size/4
+	dc.w sLongResult	;$1D02 :4rs~TotalMem():Size/4
+	dc.w 0	;$1E02 :4~CheckHandle(H)
+	dc.w 0	;$1F02 --
+	dc.w sAnyHandle	;$2002 :4H~HLock(H)
+	dc.w sMemID	;$2102 :2id~HLockAll(MemID)
+	dc.w sAnyHandle	;$2202 :4H~HUnlock(H)
+	dc.w sMemID	;$2302 :2id~HUnlockAll(MemID)
+	dc.w sSetPurge	;$2402 ~SetPurge(PrgLvl,H)
+	dc.w sSetPurgeAll	;$2502 ~SetPurgeAll(PrgLvl,MemID)
+	dc.w 0	;$2602 --
+	dc.w 0	;$2702 --
+	dc.w sPtrToHand	;$2802 :4,4H,4@~PtrToHand(@Src,DestH,Count/4)
+	dc.w sHandToPtr	;$2902 :4,4@,4H~HandToPtr(SrcH,@Dest,Count/4)
+	dc.w sHandToHand	;$2A02 :4,4H,4H~HandToHand(SrcH,DestH,Count/4)
+	dc.w sBlockMove	;$2B02 :4,4@,4@~BlockMove(@Source,@Dest,Count/4)
+	dc.w 0	;$2C02 --
+	dc.w 0	;$2D02 --
+	dc.w 0	;$2E02 --
+	dc.w sLongResult	;$2F02 :4rs~RealFreeMem():Size/4
+	dc.w sSetHandleID	;$3002 :4H,2id,2rs~SetHandleID(newMemID,theH):oldMemID
+xMMScripts
+
+sMemID	dc.w idParm,1
+	dc.w 0
+
+sOtherMemID	dc.w idOtherParm,1
+	dc.w 0
+
+sLongResult	dc.w longResult,1
+	dc.w 0
+
+sWordResult	dc.w wordResult,1
+	dc.w 0
+
+sSetPurge	dc.w usedHandle,1
+	dc.w reservedBits,5,$FFFC
+	dc.w 0
+
+sSetPurgeAll	dc.w idParm,1
+	dc.w reservedBits,3,$FFFC
+	dc.w 0
+
+sPtrToHand	dc.w longReservedBits,1,$0000,$FF00
+	dc.w usedHandle,5
+	dc.w validPtr,9
+	dc.w handParmSizeParm,5,1	;check for overrun
+	dc.w ptrParmSizeParm,9,1
+	dc.w 0
+
+sHandToPtr	dc.w longReservedBits,1,$0000,$FF00
+	dc.w validPtr,5
+	dc.w usedHandle,9
+	dc.w ptrParmSizeParm,5,1	;check for overrun
+	dc.w handParmSizeParm,9,1
+	dc.w 0
+
+sHandToHand	dc.w longReservedBits,1,$0000,$FF00
+	dc.w usedHandle,5
+	dc.w usedHandle,9
+	dc.w handParmSizeParm,5,1	;check for overrun
+	dc.w handParmSizeParm,9,1
+	dc.w 0
+
+sBlockMove	dc.w longReservedBits,1,$0000,$FF00
+	dc.w validPtr,5
+	dc.w validPtr,9
+	dc.w ptrParmSizeParm,5,1	;check for overrun
+	dc.w ptrParmSizeParm,9,1
+	dc.w 0
+
+sSetHandleID	dc.w anyHandle,1
+	dc.w idParm,5	;@@@ should allow memID = 0!
+	dc.w wordResult,7
+	dc.w 0
+
+sAnyHandle	dc.w anyHandle,1
+	dc.w 0
+
+sUsedHandle	dc.w usedHandle,1
+	dc.w 0
+
+sNewHandle	dc.w attrParm,5
+	dc.w idParm,7
+	dc.w longReservedBits,9,$0000,$FF00
+	dc.w longResult,13
+	dc.w 0
+
+sQueueEntry	dc.w queueEntry,1
+	dc.w 0
+
+sSetHandleSize	dc.w anyHandle,1
+	dc.w longReservedBits,5,$0000,$FF00
+	dc.w 0
+
+sGetHandleSize	dc.w anyHandle,1
+	dc.w longResult,5
+	dc.w 0
+
+sFindHandle	dc.w longResult,5
+	dc.w longReservedBits,1,$0000,$FF00
+	dc.w 0
+
+*-------------------------------------------------------------
+MTScripts	dc.w xMTScripts-MTScripts
+	dc.w 0	;$0103 MTBootInit
+	dc.w 0	;$0203 MTStartUp
+	dc.w 0	;$0303 MTShutDown
+	dc.w sWordResult	;$0403 MTVersion
+	dc.w 0	;$0503 MTReset
+	dc.w sWordResult	;$0603 MTStatus
+	dc.w 0	;$0703 --
+	dc.w 0	;$0803 --
+	dc.w 0	;$0903 :4@LFC~WriteBRam(@Buff)
+	dc.w 0	;$0A03 :4@L100~ReadBRam(@Buff)
+	dc.w 0	;$0B03 :2>82,2>FF~WriteBParam(Data,Parm#)
+	dc.w 0	;$0C03 :2>82,2rs~ReadBParam(Parm#):Data
+	dc.w 0	;$0D03 :2rs,2rs,2rs,2rs~ReadTimeHex():WkDay,Mn&Dy,Yr&Hr,Mn&Sec
+	dc.w 0	;$0E03 :2,2,2~WriteTimeHex(Mn&Dy,Yr&Hr,Mn&Sec)
+	dc.w 0	;$0F03 :4@L14~ReadAsciiTime(@Buff)
+	dc.w 0	;$1003 :4@L,2>FF~SetVector(Vec#,@x)
+	dc.w 0	;$1103 :2>FF,4rs~GetVector(Vec#):@x
+	dc.w 0	;$1203 :4@L0A~SetHeartBeat(@Task)
+	dc.w 0	;$1303 :4@L0A~DelHeartBeat(@Task)
+	dc.w sSystemOnly	;$1403 SY:~ClrHeartBeat()
+	dc.w 0	;$1503 :4PS,2~SysFailMgr(Code,@Msg)
+	dc.w 0	;$1603 :2>FF,4rs~GetAddr(Ref#):@Parm
+	dc.w 0	;$1703 :2rs,2rs,2rs~ReadMouse():X,Y,Stat&Mode
+	dc.w 0	;$1803 :2>7~InitMouse(Slot)
+	dc.w 0	;$1903 :2>F~SetMouse(Mode)
+	dc.w 0	;$1A03 HomeMouse
+	dc.w 0	;$1B03 ClearMouse
+	dc.w 0	;$1C03 :2,2,2,2~ClampMouse(Xmn,Xmx,Ymn,Ymx)
+	dc.w 0	;$1D03 :2rs,2rs,2rs,2rs~GetMouseClamp():Xmn,Xmx,Ymn,Ymx
+	dc.w 0	;$1E03 :2,2~PosMouse(X,Y)
+	dc.w sWordResult	;$1F03 :2rs~ServeMouse():IntStat
+	dc.w sGetNewID	;$2003 :2RBFF,2rs~GetNewID(Kind):MemID
+	dc.w sMemID	;$2103 :2id~DeleteID(MemID)
+	dc.w sMemID	;$2203 :2id,2rs~StatusID(MemID)
+	dc.w 0	;$2303 :2>F~IntSource(Ref#)
+	dc.w 0	;$2403 :2,2,2,2,2rs,2rs,2rs,2rs~FWEntry(A,X,Y,Address):P,A,X,Y
+	dc.w sLongResult	;$2503 :4rs~GetTick():Ticks/4
+	dc.w 0	;$2603 :2,4@L,4@L2,4@L4~PackBytes(@StartPtr,@Sz,@OutBf,OutSz):Size
+	dc.w 0	;$2703 :4@L2,4@L4,2,4@L~UnPackBytes(@Buff,BfSz,@StartPtr,@Sz):Size
+	dc.w 0	;$2803 :4@L,2,4@L,2,4@L,4@L,4WL,2rs~Munger(@Dst,@DstL,@t,tL,@Rpl,RplL,@Pad):N
+	dc.w 0	;$2903 :2rs~GetIRQEnable():IntStat
+	dc.w 0	;$2A03 :2,2,2,2~SetAbsClamp(Xmn,Xmx,Ymn,Ymx)
+	dc.w 0	;$2B03 :2rs,2rs,2rs,2rs~GetAbsClamp():Xmn,Xmx,Ymn,Ymx
+	dc.w 0	;$0x03
+	dc.w 0	;$0x03
+	dc.w sAddToQueue	;$2E03 ~AddToQueue(@newTask,@queueHeader)
+	dc.w sDeleteFromQ	;$2F03 ~DeleteFromQueue(@task,@queueHeader)
+	dc.w 0	;$3003 :2,4@L~SetInterruptState(@stateRec,NumBytes)
+	dc.w 0	;$3103 :2,4@L~GetInterruptState(@stateRec,NumBytes)
+	dc.w sWordResult	;$3203 :2rs~GetIntStateRecSize():Size
+	dc.w 0	;$3303 :2rs,2rs,2rs~ReadMouse2():xPos,yPos,StatMode
+	dc.w sLongResult	;$3403 :4rs~GetCodeResConverter():@proc
+	dc.w 0	;$3503 :4,2,4rs~GetROMResource(???,???/4):???H
+	dc.w 0	;$3603 :4,2~ReleaseROMResource(???,???/4)
+	dc.w 0	;$3703 :40@L,4,2>@@@,4rs~ConvSeconds(convVerb,Secs/4,@Date):SecondsOut/4
+	dc.w 0	;$3803 :2~SysBeep2(beepKind)
+	dc.w sVersionString	;$3903 :4@L9,4RBF000,2=0~VersionString(flags,Version/4,@Buffer)
+	dc.w 0	;$3A03 :2,2,2rs~WaitUntil(WaitFromTime,DelayTime):NewTime
+	dc.w sStringToText	;$3B03 :4@L,2,4@L,2RB@@@,2rs,2rs~StringToText(flags,@String,StrLen,@Buffer):ResFlags,PrntLen
+	dc.w sShowBootInfo	;$3C03 :40PS,4m1 0 ic~ShowBootInfo(@String,@Icon)
+	dc.w sWordResult	;$3D03 :2rs~ScanDevices():DevNum
+xMTScripts
+
+sSystemOnly	dc.w systemOnly
+	dc.w 0
+
+sGetNewID	dc.w reservedBits,1,$00FF
+	dc.w wordResult,3
+	dc.w 0
+
+sAddtoQueue		;same as DeleteFromQueue
+sDeleteFromQ	dc.w lockedPtr,1
+	dc.w queueEntry,5
+	dc.w 0
+
+sVersionString
+sStringToText
+sShowBootInfo	;@@@
+	dc.w 0
+
+*-------------------------------------------------------------
+QDScripts	dc.w xQDScripts-QDScripts
+	dc.w 0	;$0104 QDBootInit
+	dc.w sQDStartUp	;$0204 :2id,2,2rb0,2dp1~QDStartUp(DirPg,MastSCB,MaxWid,MemID)
+	dc.w 0	;$0304 QDShutDown
+	dc.w sWordResult	;$0404 QDVersion
+	dc.w 0	;$0504 QDReset
+	dc.w sWordResult	;$0604 QDStatus
+	dc.w 0	;$0704 --
+	dc.w 0	;$0804 --
+	dc.w 0	;$0904 :2=0>3,4rs~GetAddress(what):@Table
+	dc.w 0	;$0A04 *:~GrafOn()
+	dc.w 0	;$0B04 *:~GrafOff()
+	dc.w 0	;$0C04 :2rs~GetStandardSCB():SCB
+	dc.w 0	;$0D04 :4@L20~InitColorTable(@Table)
+	dc.w 0	;$0E04 :4@L20,2>F~SetColorTable(Tab#,@SrcTab)
+	dc.w 0	;$0F04 :4@L20,2>F~GetColorTable(Tab#,@DestTbl)
+	dc.w 0	;$1004 :2RBF000,2>F,2>F~SetColorEntry(Tab#,Ent#,NewCol)
+	dc.w 0	;$1104 :2>F,2>F,2rs~GetColorEntry(Tab#,Ent#):Color
+	dc.w 0	;$1204 :2sc,2>C7~SetSCB(Line#,SCB)
+	dc.w 0	;$1304 :2>C7,2rs~GetSCB(Line#):SCB
+	dc.w 0	;$1404 :2sc~SetAllSCBs(SCB)
+	dc.w 0	;$1504 :2~ClearScreen(Color)
+	dc.w 0	;$1604 :2sc~SetMasterSCB(SCB)
+	dc.w sWordResult	;$1704 :2rs~GetMasterSCB():SCB
+	dc.w 0	;$1804 :4@Laa~OpenPort(@Port)
+	dc.w 0	;$1904 :4@Laa~InitPort(@Port)
+	dc.w sPortParm	;$1A04 :4QP~ClosePort(@Port)
+	dc.w 0	;$1B04 :4~SetPort(@Port)
+	dc.w sLongResult	;$1C04 :4rs~GetPort():@Port
+	dc.w 0	;$1D04 VP:4@L10~SetPortLoc(@LocInfo)
+	dc.w 0	;$1E04 VP:4@L10~GetPortLoc(@LocInfo)
+	dc.w sPortAndRect	;$1F04 VP:4r~SetPortRect(@Rect)
+	dc.w sPortAndRBuff	;$2004 VP:4@L8~GetPortRect(@Rect)
+	dc.w sSetPortSize	;$2104 VP:2qc,2qc~SetPortSize(w,h)
+	dc.w sPortAnd2Coord	;$2204 VP:2qc,2qc~MovePortTo(h,v)
+	dc.w sPortAnd2Coord	;$2304 VP:2qc,2qc~SetOrigin(h,v)
+	dc.w sPortAndRgn	;$2404 VP:4R~SetClip(RgnH)
+	dc.w sPortAndRgn	;$2504 VP:4R~GetClip(RgnH)
+	dc.w sPortAndRect	;$2604 VP:4r~ClipRect(@Rect)
+	dc.w sValidPort	;$2704 HidePen
+	dc.w sValidPort	;$2804 ShowPen
+	dc.w sGetPen	;$2904 VP:4@L4~GetPen(@Pt)
+	dc.w 0	;$2A04 VP:4@L32~SetPenState(@PenSt)
+	dc.w sGetPenState	;$2B04 VP:4@L32~GetPenState(@PenSt)
+	dc.w 0	;$2C04 VP:2qc,2qc~SetPenSize(w,h)
+	dc.w 0	;$2D04 VP:4@L4~GetPenSize(@Pt)
+	dc.w 0	;$2E04 VP:2RB7FFC~SetPenMode(Mode)
+	dc.w 0	;$2F04 VP:2rs~GetPenMode():Mode
+	dc.w 0	;$3004 VP:4@L20~SetPenPat(@Patt)
+	dc.w 0	;$3104 VP:4@L20~GetPenPat(@Patt)
+	dc.w 0	;$3204 VP:4@L8~SetPenMask(@Mask)
+	dc.w 0	;$3304 VP:4@L8~GetPenMask(@Mask)
+	dc.w 0	;$3404 VP:4@L20~SetBackPat(@Patt)
+	dc.w 0	;$3504 VP:4@L20~GetBackPat(@Patt)
+	dc.w sValidPort	;$3604 PenNormal
+	dc.w 0	;$3704 VP:2>F~SetSolidPenPat(Color)
+	dc.w 0	;$3804 VP:2>F~SetSolidBackPat(Color)
+	dc.w 0	;$3904 VP:4@L20,2>F~SolidPattern(Color,@Patt)
+	dc.w 0	;$3A04 VP:2qc,2qc~MoveTo(h,v)
+	dc.w 0	;$3B04 VP:2qc,2qc~Move(dh,dv)
+	dc.w 0	;$3C04 VP:2qc,2qc~LineTo(h,v)
+	dc.w 0	;$3D04 VP:2qc,2qc~Line(dh,dv)
+	dc.w 0	;$3E04 VP:4~SetPicSave(Val/4)
+	dc.w 0	;$3F04 VP:4rs~GetPicSave():Val/4
+	dc.w 0	;$4004 VP,SY:4~SetRgnSave(Val/4)
+	dc.w 0	;$4104 VP:4rs~GetRgnSave():Val/4
+	dc.w 0	;$4204 VP,SY:4~SetPolySave(Val/4)
+	dc.w 0	;$4304 VP:4rs~GetPolySave():Val/4
+	dc.w 0	;$4404 VP:4@L38~SetGrafProcs(@GrafProcs)
+	dc.w 0	;$4504 VP:4rs~GetGrafProcs():@GrafProcs
+	dc.w 0	;$4604 VP:4~SetUserField(Val/4)
+	dc.w 0	;$4704 VP:4rs~GetUserField():Val/4
+	dc.w 0	;$4804 VP,SY:4~SetSysField(Val/4)
+	dc.w 0	;$4904 VP:4rs~GetSysField():Val/4
+	dc.w 0	;$4A04 :2qc,2qc,2qc,2qc,4@L8~SetRect(@Rect,left,top,right,bot)
+	dc.w sRectAnd2Coord	;$4B04 :2qc,2qc,4r~OffsetRect(@Rect,dh,dv)
+	dc.w sRectAnd2Coord	;$4C04 :2qc,2qc,4r~InsetRect(@Rect,dh,dv)
+	dc.w 0	;$4D04 :4@L8,4r,4r,2rs~SectRect(@R1,@R2,@DstR):nonEmptyF
+	dc.w 0	;$4E04 :4@L8,4r,4r~UnionRect(@Rect1,@Rect2,@UnionRect)
+	dc.w 0	;$4F04 :4r,4pt,2rs~PtInRect(@Pt,@Rect):Flag
+	dc.w 0	;$5004 :4@L8,4pt,4pt~Pt2Rect(@Pt1,@Pt2,@Rect)
+	dc.w 0	;$5104 :4r,4r,2rs~EqualRect(@Rect1,@Rect2):Flag
+	dc.w 0	;$5204 :4r,2rs~NotEmptyRect(@Rect):Flag
+	dc.w sPortAndRect	;$5304 VP:4r~FrameRect(@Rect)
+	dc.w sPortAndRect	;$5404 VP:4r~PaintRect(@Rect)
+	dc.w sPortAndRect	;$5504 VP:4r~EraseRect(@Rect)
+	dc.w sPortAndRect	;$5604 VP:4r~InvertRect(@Rect)
+	dc.w 0	;$5704 VP:4@L20,4r~FillRect(@Rect,@Patt)
+	dc.w sPortAndRect	;$5804 VP:4r~FrameOval(@Rect)
+	dc.w sPortAndRect	;$5904 VP:4r~PaintOval(@Rect)
+	dc.w sPortAndRect	;$5A04 VP:4r~EraseOval(@Rect)
+	dc.w sPortAndRect	;$5B04 VP:4r~InvertOval(@Rect)
+	dc.w 0	;$5C04 VP:4@L20,4r~FillOval(@Rect,@Patt)
+	dc.w 0	;$5D04 VP:2qc,2qc,4r~FrameRRect(@Rect,OvalW,OvalH)
+	dc.w 0	;$5E04 VP:2qc,2qc,4r~PaintRRect(@Rect,OvalW,OvalH)
+	dc.w 0	;$5F04 VP:2qc,2qc,4r~EraseRRect(@Rect,OvalW,OvalH)
+	dc.w 0	;$6004 VP:2qc,2qc,4r~InvertRRect(@Rect,OvalW,OvalH)
+	dc.w 0	;$6104 VP:4@L20,2qc,2qc,4r~FillRRect(@Rect,OvalW,OvalH,@Patt)
+	dc.w 0	;$6204 VP:2,2,4r~FrameArc(@Rect,Ang1,ArcAng)
+	dc.w 0	;$6304 VP:2,2,4r~PaintArc(@Rect,Ang1,ArcAng)
+	dc.w 0	;$6404 VP:2,2,4r~EraseArc(@Rect,Ang1,ArcAng)
+	dc.w 0	;$6504 VP:2,2,4r~InvertArc(@Rect,Ang1,ArcAng)
+	dc.w 0	;$6604 VP:4@L20,2,2,4r~FillArc(@Rect,Ang1,ArcAng,@Patt)
+	dc.w 0	;$6704 VP:4rs~NewRgn():RgnH
+	dc.w sOneRegion	;$6804 :4R~DisposeRgn(RgnH)
+	dc.w sTwoRegions	;$6904 :4R,4R~CopyRgn(SrcRgnH,DestRgnH)
+	dc.w sOneRegion	;$6A04 :4R~SetEmptyRgn(RgnH)
+	dc.w sSetRectRgn	;$6B04 :2qc,2qc,2qc,2qc,4R~SetRectRgn(RgnH,left,top,right,bot)
+	dc.w sRectRgn	;$6C04 :4r,4R~RectRgn(RgnH,@Rect)
+	dc.w sValidPort	;$6D04 OpenRgn
+	dc.w sPortAndRgn	;$6E04 VP:4R~CloseRgn(RgnH)
+	dc.w sOffsetsAndRgn	;$6F04 :2qc,2qc,4R~OffsetRgn(RgnH,dh,dv)
+	dc.w sOffsetsAndRgn	;$7004 :2qc,2qc,4R~InsetRgn(RgnH,dh,dv)
+	dc.w sThreeRegions	;$7104 :4R,4R,4R~SectRgn(Rgn1H,Rgn2H,DstRgnH)
+	dc.w sThreeRegions	;$7204 :4R,4R,4R~UnionRgn(Rgn1H,Rgn2H,UnionRgnH)
+	dc.w sThreeRegions	;$7304 :4R,4R,4R~DiffRgn(Rgn1H,Rgn2H,DstRgnH)
+	dc.w sThreeRegions	;$7404 :4R,4R,4R~XorRgn(Rgn1H,Rgn2H,DstRgnH)
+	dc.w 0	;$7504 :4R,4pt,2rs~PtInRgn(@Pt,RgnH):Flag
+	dc.w 0	;$7604 :4R,4r,2rs~RectInRgn(@Rect,RgnH):Flag
+	dc.w sTwoRegions	;$7704 :4R,4R,2rs~EqualRgn(Rgn1H,Rgn2H):Flag
+	dc.w sOneRegion	;$7804 :4R,2rs~EmptyRgn(RgnH):Flag
+	dc.w sPortAndRgn	;$7904 VP:4R~FrameRgn(RgnH)
+	dc.w sPortAndRgn	;$7A04 VP:4R~PaintRgn(RgnH)
+	dc.w sPortAndRgn	;$7B04 VP:4R~EraseRgn(RgnH)
+	dc.w sPortAndRgn	;$7C04 VP:4R~InvertRgn(RgnH)
+	dc.w 0	;$7D04 VP:4@L20,4R~FillRgn(RgnH,@Patt)
+	dc.w 0	;$7E04 VP:4R,2qc,2qc,4r~ScrollRect(@Rect,dh,dv,UpdtRgnH)
+	dc.w 0	;$7F04 :4@L16~PaintPixels(@ppParms)
+	dc.w 0	;$8004 :4pt,4pt~AddPt(@SrcPt,@DestPt)
+	dc.w 0	;$8104 :4pt,4pt~SubPt(@SrcPt,@DstPt)
+	dc.w 0	;$8204 :2qc,2qc,4@L4~SetPt(@Pt,h,v)
+	dc.w 0	;$8304 :4pt,4pt,2rs~EqualPt(@Pt1,@Pt2):Flag
+	dc.w sPortAndPt	;$8404 VP:4pt~LocalToGlobal(@Pt)
+	dc.w sPortAndPt	;$8504 VP:4pt~GlobalToLocal(@Pt)
+	dc.w sWordResult	;$8604 :2rs~Random():N
+	dc.w 0	;$8704 :4~SetRandSeed(Seed/4)
+	dc.w 0	;$8804 :2qc,2qc,2rs~GetPixel(Hor,Vert):Pixel
+	dc.w 0	;$8904 :4r,4r,4pt~ScalePt(@Pt,@SrcRect,@DstRect)
+	dc.w 0	;$8A04 :4r,4r,4pt~MapPt(@Pt,@SrcRect,@DstRect)
+	dc.w 0	;$8B04 :4r,4r,4r~MapRect(@Rect,@SrcRect,@DstRect)
+	dc.w 0	;$8C04 :4r,4r,4R~MapRgn(MapRgnH,@SrcRect,@DstRect)
+	dc.w 0	;$8D04 VP:4@L38~SetStdProcs(@StdProcRec)
+	dc.w 0	;$8E04 :4@La~SetCursor(@Curs)
+	dc.w 0	;$8F04 :4rs~GetCursorAdr():@Curs
+	dc.w 0	;$9004 HideCursor
+	dc.w 0	;$9104 ShowCursor
+	dc.w 0	;$9204 ObscureCursor
+	dc.w 0	;$9304 SY:~SetMouseLoc ???
+	dc.w 0	;$9404 VP:4FT~SetFont(FontH)
+	dc.w sGetPortLong	;$9504 VP:4rs~GetFont():FontH
+	dc.w 0	;$9604 VP:4@L8~GetFontInfo(@InfoRec)
+	dc.w 0	;$9704 VP:4@LC~GetFontGlobals(@FGRec)
+	dc.w sSetPortWord	;$9804 VP:2RBFFF8~SetFontFlags(Flags)
+	dc.w sGetPortWord	;$9904 VP:2rs~GetFontFlags():Flags
+	dc.w sSetPortWord	;$9A04 VP:2RBFFE0~SetTextFace(TextF)
+	dc.w sGetPortWord	;$9B04 VP:2rs~GetTextFace():TextF
+	dc.w sSetPortWord	;$9C04 VP:2RB7FF8~SetTextMode(TextM)
+	dc.w sGetPortWord	;$9D04 VP:2rs~GetTextMode():TextM
+	dc.w sSetPortLong	;$9E04 VP:4~SetSpaceExtra(SpEx/4f)
+	dc.w sGetPortLong	;$9F04 VP:4rs~GetSpaceExtra():SpEx/4f
+	dc.w sSetPortWord	;$A004 VP:2RBFFF0~SetForeColor(Color)
+	dc.w sGetPortWord	;$A104 VP:2rs~GetForeColor():Color
+	dc.w sSetPortWord	;$A204 VP:2RBFFF0~SetBackColor(BackCol)
+	dc.w sGetPortWord	;$A304 VP:2rs~GetBackColor():BackCol
+	dc.w sValidPort	;$A404 VP:2RBFF00~DrawChar(Char)
+	dc.w sPortAndPtr	;$A504 VP:4PS~DrawString(@Str)
+	dc.w sPortAndPtr	;$A604 VP:4CS~DrawCString(@cStr)
+	dc.w sDrawText	;$A704 VP:2,4@L~DrawText(@Text,Len)
+	dc.w 0	;$A804 VP:2RBFF00,2rs~CharWidth(Char):Width
+	dc.w 0	;$A904 VP:4PS,2rs~StringWidth(@Str):Width
+	dc.w 0	;$AA04 VP:4CS,2rs~CStringWidth(@cStr):Width
+	dc.w 0	;$AB04 VP:2,4@L,2rs~TextWidth(@Text,Len):Width
+	dc.w 0	;$AC04 VP:4@L8,2RBFF00~CharBounds(Char,@Rect)
+	dc.w 0	;$AD04 VP:4@L8,4PS~StringBounds(@Str,@Rect)
+	dc.w 0	;$AE04 VP:4@L8,4CS~CStringBounds(@cStr,@Rect)
+	dc.w 0	;$AF04 VP:4@L8,2,4@L~TextBounds(@Text,Len,@Rect)
+	dc.w 0	;$B004 VP:2RB7FFF~SetArcRot(ArcRot)
+	dc.w sGetPortWord	;$B104 VP:2rs~GetArcRot():ArcRot
+	dc.w 0	;$B204 :4FT~SetSysFont(FontH)
+	dc.w sLongResult	;$B304 :4rs~GetSysFont():FontH
+	dc.w sPortAndRgn	;$B404 VP:4R~SetVisRgn(RgnH)
+	dc.w sPortAndRgn	;$B504 VP:4R~GetVisRgn(RgnH)
+	dc.w 0	;$B604 :2~SetIntUse(Flag)
+	dc.w sOpenPicture	;$B704 VP:4r,4rs~OpenPicture(@FrameRect):PicH
+	dc.w sPicComment	;$B804 VP:4H,2,2~PicComment(Kind,DataSz,DataH)
+	dc.w sClosePicture	;$B904 ClosePicture
+	dc.w sDrawPicture	;$BA04 VP:4r,4H~DrawPicture(PicH,@DstRect)
+	dc.w sKillPicture	;$BB04 :4H~KillPicture(PicH)
+	dc.w 0	;$BC04 VP:4H~FramePoly(PolyH)
+	dc.w 0	;$BD04 VP:4H~PaintPoly(PolyH)
+	dc.w 0	;$BE04 VP:4H~ErasePoly(PolyH)
+	dc.w 0	;$BF04 VP:4H~InvertPoly(PolyH)
+	dc.w 0	;$C004 VP:4@L20,4H~FillPoly(PolyH,@Patt)
+	dc.w 0	;$C104 VP:4rs~OpenPoly():PolyH
+	dc.w sValidPort	;$C204 ClosePoly
+	dc.w 0	;$C304 :4H~KillPoly(PolyH)
+	dc.w 0	;$C404 :2qc,2qc,4H~OffsetPoly(PolyH,dh,dv)
+	dc.w 0	;$C504 :4r,4r,4H~MapPoly(PolyH,@SrcRect,@DstRect)
+	dc.w 0	;$C604 VP:4R~SetClipHandle(RgnH)
+	dc.w 0	;$C704 VP:4rs~GetClipHandle():RgnH
+	dc.w 0	;$C804 VP:4R~SetVisHandle(RgnH)
+	dc.w 0	;$C904 VP:4rs~GetVisHandle():RgnH
+	dc.w 0	;$CA04 InitCursor
+	dc.w 0	;$CB04 :2qc,2qc,2qc~SetBufDims(MaxW,MaxFontHt,MaxFBRext)
+	dc.w 0	;$CC04 :2qc,2qc,2qc~ForceBufDims(MaxW,MaxFontHt,MaxFBRext)
+	dc.w 0	;$CD04 :4@L8~SaveBufDims(@SizeInfo)
+	dc.w 0	;$CE04 :4@L8~RestoreBufDims(@SizeInfo)
+	dc.w sWordResult	;$CF04 :2rs~GetFGSize():FGSize
+	dc.w sValidPort	;$D004 VP:4~SetFontID(FontID/4)
+	dc.w sGetPortLong	;$D104 VP:4rs~GetFontID():FontID/4
+	dc.w sValidPort	;$D204 VP:2>FF~SetTextSize(TextSz)
+	dc.w sGetPortWord	;$D304 VP:2rs~GetTextSize():TextSz
+	dc.w sValidPort	;$D404 VP:4~SetCharExtra(ChEx/4f)
+	dc.w sGetPortLong	;$D504 VP:4rs~GetCharExtra():ChEx/4f
+	dc.w 0	;$D604 VP:2RB7FFC,2qc,2qc,4r,4@L10~PPToPort(@SrcLoc,@SrcRect,X,Y,Mode)
+	dc.w 0	;$D704 :2qc,2qc~InflateTextBuffer(NewW,NewHt)
+	dc.w 0	;$D804 :4@L10~GetRomFont(@Rec)
+	dc.w 0	;$D904 VP:2,4@L,2rs~GetFontLore(@Rec,RecSize):Size
+	dc.w sLongResult	;$DA04 :4rs~Get640Colors():@PattTable
+	dc.w sSet640Color	;$DB04 VP:2>f~Set640Color(color)
+xQDScripts
+
+sRectAnd2Coord	dc.w coordParm,1
+	dc.w coordParm,3
+	dc.w rectParm,5
+	dc.w 0
+
+sValidPort	dc.w validPort
+	dc.w 0
+
+sPortParm	dc.w portParm,1
+	dc.w 0
+
+sPortAndPt	dc.w validPort
+	dc.w pointParm,1
+	dc.w 0
+
+sPortAndRBuff	dc.w validPort	;rectangle buffer
+	dc.w lockedPtr,1
+	dc.w 0
+
+sPortAndRect	dc.w validPort
+	dc.w rectParm,1
+	dc.w 0
+
+sPortAndRgn	dc.w validPort
+	dc.w rgnParm,1
+	dc.w 0
+
+sPortAnd2Coord	dc.w validPort
+	dc.w coordParm,1
+	dc.w coordParm,3
+	dc.w 0
+
+sSetPortWord
+sSetPortLong
+sGetPortWord
+sGetPortLong	dc.w validPort
+;@@@
+	dc.w 0
+
+sQDStartUp	dc.w idParm,1
+	dc.w reservedBits,5,$3E70  ;Master SCB
+	dc.w dpParm,7,$0300
+	dc.w 0
+
+sGetPen	dc.w validPort
+	dc.w lockedPtr,1
+	dc.w 0
+
+sSetPortSize	dc.w validPort
+	dc.w reservedBits,1,$C000  ;width/height 0..3FFF
+	dc.w reservedBits,3,$C000
+	dc.w 0
+
+sPortAndPtr	dc.w validPort
+	dc.w lockedPtr,1
+	dc.w 0
+
+sDrawText	dc.w validPort
+	dc.w lockedPtr,3
+	dc.w 0
+
+sOpenPicture
+sClosePicture
+sDrawPicture
+sKillPicture
+sPicComment
+;@@@
+	dc.w validPort
+	dc.w needTool,$12
+	dc.w 0
+
+sGetPenState	dc.w validPort
+	dc.w lockedSizedPtr,1,50  ;record is 50 bytes! (TB Ref 3, page 43-2);
+	dc.w 0
+
+sSet640Color	dc.w reservedBits,1,$FFF0
+	dc.w 0
+
+sSetRectRgn	dc.w coordParm,1
+	dc.w coordParm,3
+	dc.w coordParm,5
+	dc.w coordParm,7
+	dc.w rgnParm,9
+	dc.w 0
+
+sRectRgn	dc.w rectParm,1
+	dc.w rgnParm,5
+	dc.w 0
+
+sOffsetsAndRgn	dc.w coordParm,1
+	dc.w coordParm,3
+	dc.w rgnParm,5
+	dc.w 0
+
+sThreeRegions	dc.w rgnParm,9
+sTwoRegions	dc.w rgnParm,5
+sOneRegion	dc.w rgnParm,1
+	dc.w 0
+
+*-------------------------------------------------------------
+DeskScripts	dc.w xDeskScripts-DeskScripts
+xDeskScripts
+
+*-------------------------------------------------------------
+EMScripts	dc.w xEMScripts-EMScripts
+xEMScripts
+
+*-------------------------------------------------------------
+SchedScripts	dc.w xSchedScripts-SchedScripts
+xSchedScripts
+
+*-------------------------------------------------------------
+SoundScripts	dc.w xSoundScripts-SoundScripts
+xSoundScripts
+
+*-------------------------------------------------------------
+ADBScripts	dc.w xADBScripts-ADBScripts
+xADBScripts
+
+*-------------------------------------------------------------
+SANEScripts	dc.w xSANEScripts-SANEScripts
+xSANEScripts
+
+*-------------------------------------------------------------
+IMScripts	dc.w xIMScripts-IMScripts
+xIMScripts
+
+*-------------------------------------------------------------
+TextScripts	dc.w xTextScripts-TextScripts
+xTextScripts
+
+*-------------------------------------------------------------
+WindScripts	dc.w xWindScripts-WindScripts
+xWindScripts
+
+*-------------------------------------------------------------
+MenuScripts	dc.w xMenuScripts-MenuScripts
+xMenuScripts
+
+*-------------------------------------------------------------
+*
+* 28-Jul-92 DAL -- quick pass at Control Manager.  Not a thorough start.
+*
+CtrlScripts	dc.w xCtrlScripts-CtrlScripts
+	dc.w 0	;$0110 CtlBootInit()
+	dc.w 0	;$0210 CtlStartUp(MemID,DirPg)
+	dc.w 0	;$0310 CtlShutDown()
+	dc.w 0	;$0410 CtlVersion():Vers
+	dc.w 0	;$0510 CtlReset()
+	dc.w 0	;$0610 CtlStatus():ActFlg
+	dc.w 0	;$0710
+	dc.w 0	;$0810
+	dc.w 0	;$0910 NewControl(@W,@R,@T,F,V,P1,P2,@p,r/4,@C):cH
+	dc.w sOneCtlHndl	;$0A10 DisposeControl(CtrlH)
+	dc.w 0	;$0B10 KillControls(@Wind)
+	dc.w 0	;$0C10 SetCtlTitle(@Title,CtrlH)
+	dc.w sOneCtlHndl	;$0D10 GetCtlTitle(CtrlH):@Title
+	dc.w sOneCtlHndl	;$0E10 HideControl(CtrlH)
+	dc.w sOneCtlHndl	;$0F10 ShowControl(CtrlH)
+	dc.w 0	;$1010 DrawControls(@Wind)
+	dc.w 0	;$1110 HiliteControl(Flag,CtrlH)
+	dc.w 0	;$1210 CtlNewRes()
+	dc.w 0	;$1310 FindControl(@CtrlHVar,X,Y,@Wind):Part
+	dc.w sOneCtlHndl	;$1410 TestControl(X,Y,CtrlH):Part
+	dc.w 0	;$1510 TrackControl(X,Y,@ActProc,CtrlH):Part
+	dc.w sOneCtlHndl	;$1610 MoveControl(X,Y,CtrlH)
+	dc.w 0	;$1710 DragControl(X,Y,@LimR,@slR,Axis,CtrlH)
+	dc.w 0	;$1810 SetCtlIcons(FontH):OldFontH
+	dc.w sOneCtlHndl	;$1910 SetCtlValue(Val,CtrlH)
+	dc.w sOneCtlHndl	;$1A10 GetCtlValue(CtrlH):Val
+	dc.w sOneCtlHndl	;$1B10 SetCtlParams(P2,P1,CtrlH)
+	dc.w sOneCtlHndl	;$1C10 GetCtlParams(CtrlH):P1,P2
+	dc.w 0	;$1D10 DragRect(@acPr,@P,X,Y,@drR,@l,@slR,F):M/4
+	dc.w 0	;$1E10 GrowSize():Size/4
+	dc.w 0	;$1F10 GetCtlDpage():DirPg
+	dc.w sOneCtlHndl	;$2010 SetCtlAction(@ActProc,CtrlH)
+	dc.w sOneCtlHndl	;$2110 GetCtlAction(CtrlH):Action/4
+	dc.w 0	;$2210 SetCtlRefCon(Refcon/4,CtrlH)
+	dc.w sOneCtlHndl	;$2310 GetCtlRefCon(CtrlH):Refcon/4
+	dc.w sOneCtlHndl	;$2410 EraseControl(CtrlH)
+	dc.w sOneCtlHndl	;$2510 DrawOneCtl(CtrlH)
+	dc.w 0	;$2610 FindTargetCtl():CtrlH
+	dc.w 0	;$2710 MakeNextCtlTarget():CtrlH
+	dc.w sOneCtlHndl	;$2810 MakeThisCtlTarget(CtrlH)
+	dc.w 0	;$2910 SendEventToCtl(TgtOnly,@Wind,@eTask):Accepted
+	dc.w sOneCtlHndl	;$2A10 GetCtlID(CtrlH):CtlID/4
+	dc.w sOneCtlHndl	;$2B10 SetCtlID(CtlID/4,CtrlH)
+	dc.w 0	;$2C10 CallCtlDefProc(CtrlH,Msg,Param/4):Result/4
+	dc.w 0	;$2D10 NotifyCtls(Mask,Msg,Param/4,@Wind)
+	dc.w sOneCtlHndl	;$2E10 GetCtlMoreFlags(CtrlH):Flags
+	dc.w sOneCtlHndl	;$2F10 SetCtlMoreFlags(Flags,CtrlH)
+	dc.w 0	;$3010 GetCtlHandleFromID(@Wind,CtlID/4):CtrlH
+	dc.w 0	;$3110 NewControl2(@Wind,InKind,InRef/4):CtrlH
+	dc.w 0	;$3210 CMLoadResource(rType,rID/4):resH
+	dc.w 0	;$3310 CMReleaseResource(rType,rID/4)
+	dc.w 0	;$3410 SetCtlParamPtr(@SubArray)
+	dc.w 0	;$3510 GetCtlParamPtr():@SubArray
+	dc.w 0	;$3610
+	dc.w 0	;$3710 InvalCtls(@Wind)
+	dc.w 0	;$3810 [reserved]
+	dc.w 0	;$3910 FindRadioButton(@Wind,FamilyNum):WhichRadio
+	dc.w 0	;$3A10 SetLETextByID(@Wind,leID/4,@PString)
+	dc.w 0	;$3B10 GetLETextByID(@Wind,leID/4,@PString)
+	dc.w 0	;$3C10
+	dc.w 0	;$3D10
+	dc.w 0	;$3E10
+	dc.w 0	;$3F10
+xCtrlScripts
+
+sOneCtlHndl	dc.w anyHandle,1
+	dc.w 0
+
+*-------------------------------------------------------------
+LoaderScripts	dc.w xLoaderScripts-LoaderScripts
+xLoaderScripts
+
+*-------------------------------------------------------------
+QDAuxScripts	dc.w xQDAuxScripts-QDAuxScripts
+	dc.w 0	;$0112 QDAuxBootInit
+	dc.w sQDAuxStartUp	;$0212 QDAuxStartUp
+	dc.w 0	;$0312 QDAuxShutDown
+	dc.w 0	;$0412 QDAuxVersion
+	dc.w 0	;$0512 QDAuxReset
+	dc.w 0	;$0612 QDAuxStatus
+	dc.w 0	;$0712 --
+	dc.w 0	;$0812 --
+	dc.w 0	;$0912 CopyPixels
+	dc.w 0	;$0A12 WaitCursor
+	dc.w sDrawIcon	;$0B12 DrawIcon
+	dc.w sSpecialRect	;$0C12 SpecialRect
+	dc.w 0	;$0D12 SeedFill
+	dc.w 0	;$0E12 CalcMask
+	dc.w 0	;$0F12 GetSysIcon
+	dc.w 0	;$1012 PixelMap2Rgn
+	dc.w 0	;$1112 --
+	dc.w 0	;$1212 --
+	dc.w 0	;$1312 IBeamCursor
+	dc.w sWhooshRect	;$1412 WhooshRect
+xQDAuxScripts
+
+sQDAuxStartUp	dc.w needTool,4
+	dc.w 0
+
+sDrawIcon	dc.w validPort
+	dc.w coordParm,1
+	dc.w coordParm,3
+	dc.w reservedBits,5,$00F8
+	dc.w lockedPtr,7
+	dc.w 0
+
+sSpecialRect	dc.w validPort
+	dc.w rectParm,5
+	dc.w 0
+
+sWhooshRect	dc.w rectParm,1	;@@@ should allow NIL!
+	dc.w rectParm,5	;@@@ should allow NIL!
+	dc.w longReservedBits,9,$FFFF,$1FFF
+	dc.w 0
+
+*-------------------------------------------------------------
+PMScripts	dc.w xPMScripts-PMScripts
+xPMScripts
+
+*-------------------------------------------------------------
+LEScripts	dc.w xLEScripts-LEScripts
+xLEScripts
+
+*-------------------------------------------------------------
+DialogScripts	dc.w xDialogScripts-DialogScripts
+xDialogScripts
+
+*-------------------------------------------------------------
+ScrapScripts	dc.w xScrapScripts-ScrapScripts
+xScrapScripts
+
+*-------------------------------------------------------------
+StdFileScripts	dc.w xStdFileScripts-StdFileScripts
+xStdFileScripts
+
+*-------------------------------------------------------------
+NSynthScripts	dc.w xNSynthScripts-NSynthScripts
+xNSynthScripts
+
+*-------------------------------------------------------------
+NSeqScripts	dc.w xNSeqScripts-NSeqScripts
+xNSeqScripts
+
+*-------------------------------------------------------------
+FontScripts	dc.w xFontScripts-FontScripts
+xFontScripts
+
+*-------------------------------------------------------------
+ListScripts	dc.w xListScripts-ListScripts
+xListScripts
+
+*-------------------------------------------------------------
+ACEScripts	dc.w xACEScripts-ACEScripts
+xACEScripts
+
+*-------------------------------------------------------------
+RMScripts	dc.w xRMScripts-RMScripts
+xRMScripts
+
+*-------------------------------------------------------------
+MIDIScripts	dc.w xMIDIScripts-MIDIScripts
+xMIDIScripts
+
+*-------------------------------------------------------------
+VideoScripts	dc.w xVideoScripts-VideoScripts
+xVideoScripts
+
+*-------------------------------------------------------------
+TEScripts	dc.w xTEScripts-TEScripts
+xTEScripts
+
+*-------------------------------------------------------------
+MSynthScripts	dc.w xMSynthScripts-MSynthScripts
+xMSynthScripts
+
+*-------------------------------------------------------------
+AnimScripts	dc.w xAnimScripts-AnimScripts
+xAnimScripts
+
+*-------------------------------------------------------------
+MediaScripts	dc.w xMediaScripts-MediaScripts
+xMediaScripts
+
+
+****************************************************************************
+*
+* ValidateHandle -- take input on stack
+*
+****************************************************************************
+ValidateHandle
+;	lda 5,s
+;	and #$ff00
+;	beq @top8bitsClear
+;	lda #msgPtrUnclean
+;	jsr complain
+;;;;	bra @exit
+;
+;@top8bitsClear	lda 5,s
+;	ora 3,s
+;	bne @ptrNotNil
+;	lda #msgPtrNil
+;	jsr complain
+;;;;	bra @exit
+;
+;@ptrNotNil	lda 5,s
+;	cmp #$00BC	;special case for TransWarp GS
+;	beq @validArea
+;	cmp #$00F0
+;	bcs @validArea
+;	cmp #$00E2
+;	bcs @badArea
+;	cmp #$00E0
+;	bcs @validArea
+;	cmp >$e11624	;number of 64K banks
+;	bcc @validArea
+;
+;@badArea	lda #msgPtrBadArea
+;	jsr complain
+;;;;	bra @exit
+;
+;@validArea
+;	lda 3,s
+;	tax
+;	lda 5,s
+;	jsr FindAddressInfo
+;	bcs @unallocated
+
+	lda 5,s
+	pha
+	lda 5,s
+	pha
+	_CheckHandle
+	bcs @badHandle
+
+@exit	plx
+	ply
+	ply	;strip off input pointer
+	phx
+	rts
+
+@badHandle	lda #msgBadHandle
+	jsr complain
+	bra @exit
+
+msgBadHandle	dc.b '** not a valid handle **',0
+
+****************************************************************************
+****************************************************************************
+*
+* ValidateLockedPtr -- take input on stack
+*
+****************************************************************************
+ValidateLockedPtr	lda 5,s
+	and #$ff00
+	beq @top8bitsClear
+	lda #msgPtrUnclean
+	jsr complain
+;;;	bra @exit
+
+@top8bitsClear	lda 5,s
+	ora 3,s
+	bne @ptrNotNil
+	lda #msgPtrNil
+	jsr complain
+;;;	bra @exit
+
+@ptrNotNil	lda 5,s
+	cmp #$00BC	;special case for TransWarp GS
+	beq @validArea
+	cmp #$00F0
+	bcs @validArea
+	cmp #$00E2
+	bcs @badArea
+	cmp #$00E0
+	bcs @validArea
+	cmp >$e11624	;number of 64K banks
+	bcc @validArea
+
+@badArea	lda #msgPtrBadArea
+	jsr complain
+;;;	bra @exit
+
+@validArea
+	lda 3,s
+	tax
+	lda 5,s
+	jsr FindAddressInfo
+	bcs @unallocated
+
+	txa
+	bmi @exit
+	and #$4300
+	cmp #$4000
+	beq @exit
+
+	lda #msgPtrUnsafe
+	jsr complain
+;;;	bra @exit
+
+@exit	plx
+	ply
+	ply	;strip off input pointer
+	phx
+	rts
+
+@unallocated	lda #msgPtrUnallocated
+	jsr complain
+	bra @exit
+
+****************************************************************************
+*
+* ValidatePtr -- take input on stack
+*
+* (@@@ Should combine this with ValidateLockedPtr--the only difference
+*      is we don't check the handle's attributes)
+*
+****************************************************************************
+ValidatePtr	lda 5,s
+	and #$ff00
+	beq @top8bitsClear
+	lda #msgPtrUnclean
+	jsr complain
+;;;	bra @exit
+
+@top8bitsClear	lda 5,s
+	ora 3,s
+	bne @ptrNotNil
+	lda #msgPtrNil
+	jsr complain
+;;;	bra @exit
+
+@ptrNotNil	lda 5,s
+	cmp #$00BC	;special case for TransWarp GS
+	beq @validArea
+	cmp #$00F0
+	bcs @validArea
+	cmp #$00E2
+	bcs @badArea
+	cmp #$00E0
+	bcs @validArea
+	cmp >$e11624	;number of 64K banks
+	bcc @validArea
+
+@badArea	lda #msgPtrBadArea
+	jsr complain
+;;;	bra @exit
+
+@validArea
+	lda 3,s
+	tax
+	lda 5,s
+	jsr FindAddressInfo
+	bcs @unallocated
+
+@exit	plx
+	ply
+	ply	;strip off input pointer
+	phx
+	rts
+
+@unallocated	lda #msgPtrUnallocated
+	jsr complain
+	bra @exit
+
+msgPtrUnallocated	dc.b '** Detected pointer to unallocated memory **',0
+msgPtrUnsafe	dc.b '** Detected pointer to moveable or purgeable memory **',0
+msgPtrUnclean	dc.b '** Detected pointer with extra bits set **',0
+msgPtrNil	dc.b '** Detected illegal NIL pointer **',0
+msgPtrBadArea	dc.b '** Detected pointer into impossible bank **',0
+
+****************************************************************************
+*
+* FindAddressInfo
+*
+* Input: AX
+*
+* Output: CLC: A=handle's ID, X=handle's attributes
+*         SEC: unallocated address
+*
+* topOfBlock = address of the next byte past the end of the found block
+*              ($FFFFFFFF if block not found)
+* startOfBlock = address of the first byte of the found block
+*
+* ROM is treated as allocated, ID=0, Attr=locked
+*
+****************************************************************************
+FindAddressInfo	name
+	ldy #$ffff
+	sty topOfBlock
+	sty topOfBlock+2
+	stz startOfBlock
+	stz startOfBlock+2
+
+	cmp #$00f8
+	bcc @inRAM
+
+	clc
+	lda #$0000
+	ldx #$8000
+	rts
+
+@inRAM	pha
+	pha	;space for FindHandle result
+
+	jsr myFindHandle	;AX=input; result space is on stack
+
+	lda #-1
+	tax
+	bcs @error	;return with carry set
+	phd
+	tsc
+	tcd
+
+* compute topOfBlock = pointer + size
+	clc
+	lda [3]
+	sta startOfBlock
+	ldy #8	;offset to handle size
+	adc [3],y
+	sta topOfBlock
+	ldy #2
+	lda [3],y
+	sta startOfBlock+2
+	ldy #10	;offse to handle size, high
+	adc [3],y
+	sta topOfBlock+2
+	bcc @topOK
+	dec topOfBlock
+	dec topOfBlock+2	;force to $ffffffff for ROM addresses
+@topOK
+
+* return X=attributes, A=owner ID
+	ldy #4	;offset to handle attributes
+	lda [3],y
+	tax	;X=attributes
+	iny
+	iny
+	lda [3],y	;A=ID
+	pld
+	clc	
+@error	ply
+	ply
+	rts
+
+*
+* CallerMustBeSystem
+*
+CallerMustBeSystem	name
+	lda theCallerID
+	cmp SystemPatchID
+	beq @isSystem
+	and #$f000
+	beq @isSystem
+	cmp #$4000
+	beq @isSystem
+	sec
+	rts
+@isSystem	clc
+	rts
+
+****************************************************************************
+*
+* checkSpaceInBlock -- must call FindAddressInfo or Validate[Locked]Ptr first
+*
+* Inputs:  tScratch = base address
+*          A = number of bytes needed
+*          topOfBlock (set by FindAddressInfo)
+*
+* Output:  SEC if the run of A bytes crosses the end of the block
+*
+* (Exit with SEC if tScratch+A is strictly greater than topOfBlock)
+*
+****************************************************************************
+checkSpaceInBlock	name
+	clc
+	adc tScratch
+	tax
+	lda tScratch+2
+	adc #0
+	cmp topOfBlock+2
+	bne @compared
+	cpx topOfBlock
+	bne @compared
+	clc	;equal is okay!
+@compared	rts
+
+****************************************************************************
+*
+* myStatusID
+*
+* Input:  Memory ID in A
+* Output: carry clear if any version of this ID is in the
+*         ID Manager's handle ($E1/0FD0).
+*
+* (Calling the real StatusID is too slow to do on every
+* toolbox call, so we use this thang instead.)
+*
+****************************************************************************
+myStatusID	phd
+	and #$f0ff
+	pha	;input ID
+	lda >$e10fd2
+	pha
+	lda >$e10fd0
+	pha
+	tsc
+	tcd
+@ptr	equ 1
+@id	equ @ptr+4
+
+	ldy #8	;offset to handle's size
+	lda [<@ptr],y
+	pha	;save handle size
+	ldy #2
+	lda [<@ptr],y
+	tax
+	lda [<@ptr]
+	sta <@ptr
+	stx <@ptr+2
+	ply	;get y = handle size
+	beq @error
+@search	dey
+	dey
+	lda [<@ptr],y
+	and #$f0ff
+	cmp <@id
+	beq @found
+	tyx
+	bne @search
+@error	sec
+	dc.b $24	;hide next byte
+@found	clc
+	pla
+	pla
+	pla
+	pld
+	rts
+
+
+****************************************************************************
+*
+* myFindHandle
+*
+* Input: LONG space on stack; AX = address
+* Result: long result on stack, SEC if error
+*
+* Calling the real FindHandle takes too long, so
+* I'll do it myself.
+*
+****************************************************************************
+myFindHandle	ldy #0	;offset to main handle chain
+	phd
+	pha
+	pha	;pushed space for <@endOfBlock
+	pha
+	pha	;pushed space for <@currPtr
+	pha
+	phx	;pushed <@target
+	phy	;push handle offset
+	tsc
+	tcd
+
+@whichChain	equ 1
+@target	equ @whichChain+2
+@currPtr	equ @target+4
+@endOfBlock	equ @currPtr+4
+@oldD	equ @endOfBlock+4
+@rts	equ @oldD+2
+@currHandle	equ @rts+2
+
+*** See if we have the block cached already
+	lda <@target+2
+	ldx <@target
+	jsr FindHandleInCache
+	bcs @notCached
+	sta <@currHandle+2
+	stx <@currHandle
+	clc
+	bra @exit
+@notCached
+
+*** Scan through the used-handle chain looking for the block containing @target
+	ldx <@whichChain
+	lda >$e11602,x
+	sta <@currHandle+2
+	lda >$e11600,x
+	sta <@currHandle
+
+@checkThisOne	lda <@currHandle+1
+	beq @failure
+
+	clc
+	lda [<@currHandle]
+	sta <@currPtr
+	ldy #8	;offset to size
+	adc [<@currHandle],y
+	sta <@endOfBlock
+	ldy #2
+	lda [<@currHandle],y
+	sta <@currPtr+2
+	ldy #8+2
+	adc [<@currHandle],y
+	sta <@endOfBlock+2
+	bcs @foundIt	;it's in the post-galactic gap!
+
+	lda <@target+2
+	ldx <@target
+	cmp <@currPtr+2
+	bne @compared
+	cpx <@currPtr
+@compared	bcc @failure	;if currPtr>target, we've failed
+
+@thisOne	cmp <@endOfBlock+2
+	bne @comp2
+	cpx <@endOfBlock
+@comp2	bcc @foundIt	;if target<endOfBlock, we've succeeded
+
+@keepTrying	ldy #$0010	;link to next handle
+	lda [<@currHandle],y
+	tax
+	iny
+	iny
+	lda [<@currHandle],y
+	sta <@currHandle+2
+	stx <@currHandle
+	bra @checkThisOne
+
+@failure	sec
+	bra @exit
+
+@foundIt	lda <@currHandle+2
+	ldx <@currHandle
+	jsr CacheThisHandle
+	clc
+
+@exit	pla
+	pla	;pulled @endOfBlock
+	pla
+	pla	;pulled @currPtr
+	pla
+	pla	;pulled @target
+	pla	;pulled @whichChain
+	pld
+	rts
+
+****************************************************************************
+*
+* Handle caching for myFindHandle
+*
+****************************************************************************
+handleCacheSize	equ 10
+
+*---------------------------------------------------------------------------
+*
+* CacheThisHandle
+*
+* Input: handle in AX
+*
+* Add handle to front of list, bumping everybody else down.
+*
+* Increments cacheEntries if we don't already have handleCacheSize
+*   of them.
+*
+*---------------------------------------------------------------------------
+CacheThisHandle	name
+	pha
+	phx
+
+	ldx #handleCacheSize*4-6
+@shift	lda cachedHandles,x
+	sta cachedHandles+4,x
+	dex
+	dex
+	bpl @shift
+
+	pla
+	sta cachedHandles
+	pla
+	sta cachedHandles+2
+
+	lda cacheEntries
+	cmp #handleCacheSize
+	bcs @full
+	inc a
+	sta cacheEntries
+@full	rts
+
+*---------------------------------------------------------------------------
+*
+* FindHandleInCache
+*
+* Input: AX = handle
+*
+* Output: CLC if found, handle in AX
+*
+* If handle is found, we move it to the front of the list for next time.
+*
+*---------------------------------------------------------------------------
+FindHandleInCache	name
+	ldy cacheEntries
+	bne @nontrivial
+	sec
+	rts
+
+@nontrivial	phd
+	pha
+	pha	;space for @currHandle
+	pha
+	phx	;pushed @target
+	pea 0	;pushed @index
+	lda cacheEntries
+	pha	;pushed @count
+	pha
+	pha	;space for @endOfBlock
+	pha
+	pha	;space for @currPtr
+	tsc
+	tcd
+
+@currPtr	equ 1
+@endOfBlock	equ @currPtr+4
+@count	equ @endOfBlock+4
+@index	equ @count+2
+@target	equ @index+2
+@currHandle	equ @target+4
+
+@checkOneHandle	ldx <@index
+	lda cachedHandles+2,x
+	sta <@currHandle+2
+	lda cachedHandles,x
+	sta <@currHandle
+
+	clc
+	lda [<@currHandle]
+	sta <@currPtr
+	ldy #8	;offset to handle size
+	adc [<@currHandle],y
+	sta <@endOfBlock
+	ldy #2
+	lda [<@currHandle],y
+	sta <@currPtr+2
+	ldy #8+2	;offset to handle size high
+	adc [<@currHandle],y
+	sta <@endOfBlock+2
+
+	lda <@target+2
+	ldx <@target
+	cmp <@currPtr+2
+	bne @compared
+	cpx <@currPtr
+@compared	bcc @failure	;if currPtr>target, we've failed
+
+@thisOne	cmp <@endOfBlock+2
+	bne @comp2
+	cpx <@endOfBlock
+@comp2	bcc @foundIt	;if target<endOfBlock, we've succeeded (leave with CLC)
+
+@failure	lda <@index
+	clc
+	adc #4
+	sta <@index
+	dec <@count
+	bne @checkOneHandle
+@notFound	sec
+	bra @exit
+
+*** Move this handle to the beginning of the cache (X=index)
+@foundIt	ldx <@index
+	beq @atFront
+@makeRoom	lda cachedHandles-4,x
+	sta cachedHandles,x
+	lda cachedHandles-2,x
+	sta cachedHandles+2,x
+	dex
+	dex
+	dex
+	dex
+	bpl @makeRoom
+	lda <@currHandle+2
+	sta cachedHandles+2
+	lda <@currHandle
+	sta cachedHandles
+@atFront	clc
+
+@exit	pla
+	pla	;pulled @currPtr
+	pla
+	pla	;pulled @endOfBlock
+	pla	;pulled @count
+	pla	;pulled @index
+	pla
+	pla	;pulled @target
+	plx
+	pla	;pulled @currHandle into XA
+	pld
+	rts
+
+*---------------------------------------------------------------------------
+*
+* NotifyCacheOfFunc
+*
+* Input: A = function number
+*
+* Flushes cache if this is a function that can invalidate
+* the handle cache.
+*
+*---------------------------------------------------------------------------
+NotifyCacheOfFunc	name
+	tax
+	and #$00ff
+	dec a
+	dec a
+	bne @clean
+	txa	;only Memory Manager functions can flush
+	ldx #flushingFuncsEnd-flushingFuncs-2
+@search	cmp flushingFuncs,x
+	beq FlushHandleCache
+	dex
+	dex
+	bpl @search
+@clean	rts
+
+flushingFuncs	dc.w $0902	;NewHandle
+	dc.w $0A02	;ReAllocHandle
+	dc.w $0B02	;RestoreHandle
+	dc.w $1002	;DisposeHandle
+	dc.w $1102	;DisposeAll
+	dc.w $1202	;PurgeHandle
+	dc.w $1302	;PurgeAll
+	dc.w $1902	;SetHandleSize
+	dc.w $1f02	;CompactMem
+flushingFuncsEnd
+
+*---------------------------------------------------------------------------
+*
+* FlushHandleCache
+*
+*---------------------------------------------------------------------------
+flushHandleCache	name
+	stz cacheEntries
+	rts
+
+myHandleCache	name	;not code!
+cacheEntries	dc.w 0
+cachedHandles	ds.b handleCacheSize*4
+
+****************************************************************************
+*
+* Miscellaneous global storage
+*
+****************************************************************************
+	export SystemPatchID
+SystemPatchID	dc.w 0
+topOfBlock	dc.l 0	;set by FindAddressInfo
+startOfBlock	dc.l 0	;set by FindAddressInfo
+
+****************************************************************************
+*
+* Miscellaneous storage during an intercepted call
+*
+****************************************************************************
+active	dc.w 0	;nonzero = we're active (we aren't reentrant)
+oldPRegister	dc.w 0	;caller's P register (2 copies)
+what	dc.w 0	;pointer to a complaint message
+where	dc.l 0	;address the call is coming from
+func	dc.w 0	;tool function being intercepted
+StateHand	dc.l 0	;for SaveTextState/RestoreTextState
+NLTextState	dc.l 0	;preserve Nifty List's text state
+OldShadow	dc.w 0	;old value of $C035 and $C036
+TheStackPtr	dc.w 0	;caller's stack pointer
+theCallerID	dc.w 0	;owner id of caller address
+theCallerAttr	dc.w 0	;handle attributes of caller address
+stackLimit	dc.w 0	;highest valid stack address plus 1
+
+****************************************************************************
+*
+* Messages
+*
+****************************************************************************
+IntroMsg	dc.b '===============================',13
+	dc.b 'Big Brother tool-call intercept',13
+	dc.b '===============================',13,13,0
+
+TrapPrompt	dc.b 13,13,'Space=continue, N=visit Nifty List: ',0
+StackMsg	dc.b 'Stack = ',0
+CallerMsg	dc.b '; Caller''s ID = ',0
+CallerAttrMsg	dc.b ', attr = ',0
+
+*                         0        1         2         3         4         5         6         7         8
+*                         12345678901234567890123456789012345678901234567890123456789012345678901234567890
+msgNotActive	dc.b '** Caution: function called while toolset inactive or missing **',0
+msgBadFunction	dc.b '** Caution: no such function in tool set **',0
+msg8bit	dc.b '** Caution: tool called with 8-bit registers **',0
+msgDecimalMode	dc.b '** WARNING: tool call with Decimal mode set! **',0
+msgBootInitReset	dc.b '** Caution: xxxBootInit and xxxReset are reserved for the system **',0
+msgReserved78	dc.b '** Caution: functions $07xx and $08xx are reserved for future use **',0
+msgCallerAttrUnsafe	dc.b '** Caution: caller''s memory is movable or purgeable **',0
+msgCalledFromBadID	dc.b '** Caution: caller''s memory ID is not valid **',0
+msgBadCallerAddr	dc.b '** Caution: caller address is not allocated **',0
+msgBadStack	dc.b '** Caution: caller''s stack is not allocated **',0
+msgUnsafeStack	dc.b '** Caution: caller''s stack is movable or purgeable **',0
+msgStillStarted	dc.b '** WARNING: At TLShutDown, tool $'
+toolNumStillStarted	dc.b 'xx is still active **',0
+
+****************************************************************************
+
+complain	name
+	phy
+	sta what
+	pha
+	pha
+	_SaveTextState
+	pla
+	sta StateHand
+	pla
+	sta StateHand+2
+
+	lda >$e0c035
+	sta OldShadow
+	and #$fffe	;was $fff7 2-Nov-90 DAL (OOPS!)
+	sta >$e0c035
+
+* %%% Need to force the Nifty List text session!
+* %%% Need to disable the pause/abort features of the text session
+
+	sep #$20
+	sta >$e0c00d
+	rep #$20
+
+	pha
+	pha
+	pea 0
+	pea 0
+	pea nlGetTextState
+	jsl NLService
+	pla
+	sta NLTextState
+	pla
+	sta NLTextState+2
+
+	lda #12
+	jsr cout
+
+	pushlong #IntroMsg
+	pea nlWriteCStr
+	jsl NLService
+
+	pea complain>>16
+	lda what
+	pha
+	pea nlWriteCStr
+	jsl NLService
+
+	jsr crout
+	jsr crout
+
+	ldx #nlSecSysTool
+	lda func
+	jsr ShowSectionInfo
+	jsr crout
+
+	pushlong #StackMsg
+	pea nlWriteCStr
+	jsl NLService
+	lda theStackPtr
+	jsr prword
+
+	pushlong #CallerMsg
+	pea nlWriteCStr
+	jsl NLService
+	lda theCallerID
+	jsr prword
+
+	pushlong #CallerAttrMsg
+	pea nlWriteCStr
+	jsl NLService
+	lda theCallerAttr
+	jsr prword
+	jsr crout
+	jsr crout
+
+	pha
+	pha	;space for result
+	lda where+2
+	pha
+	lda where
+	pha	;input address
+	pea nlDisasm1
+	jsl NLService
+	pla
+	pla
+
+	pushlong #TrapPrompt
+	pea nlWriteCStr
+	jsl NLService
+
+@again	pha
+	pha
+	pha
+	pha
+	pea nlGetChar
+	jsl NLService
+	pla
+	plx
+	jsr DoSubCommand
+	bcc @again
+
+
+	lda OldShadow
+	sta >$e0c035
+
+	lda StateHand+2
+	pha
+	lda StateHand
+	pha
+	_RestoreTextState
+
+	lda NLTextState+2
+	pha
+	lda NLTextState
+	pha
+	pea nlSetTextState
+	jsl NLService
+
+	ply
+	rts
+
+****************************************************************************
+*
+* DoSubCommand
+*
+* Command character in A
+* Return SEC if we're done
+*
+****************************************************************************
+DoSubCommand	name
+	cmp #' '
+	beq @done
+
+	cmp #'n'
+	beq @visitNL
+	cmp #'N'
+	beq @visitNL
+
+	clc
+	rts
+
+@visitNL	pha
+	pha
+	_SaveTextState
+	pha
+	pha
+	pea 0
+	pea 0
+	pea nlGetTextState
+	jsl NLService
+
+	pha
+	pha
+	pea 0
+	pea 0
+	pea nlEnter
+	jsl NLService
+	pla
+	pla
+
+	pea nlSetTextState
+	jsl NLService
+	_RestoreTextState
+
+	clc
+	rts
+
+@done	sec
+	rts
+
+**************************************************************
+**************************************************************
+*
+* ShowSectionInfo -- A=value, X=section number
+*
+* A=0: show all entries
+*
+**************************************************************
+ShowSectionInfo	name
+	stx SectionNum
+	sta InfoLkupData
+
+	pha
+	pha		;input for nlWriteWord
+	pea nlWriteWord
+	jsl NLService
+	jsr spout
+	
+	pushlong #InfoLkupParms
+	pea nlLookup
+	jsl NLService
+
+	lda lookupBuff
+	and #$00ff
+	bne @gotInfo
+
+	pushlong #InfoNone
+	pea nlWriteCStr
+	jsl NLService
+	bra @InfoEx
+
+@gotInfo	pushlong #lookupBuff
+	pea nlShowStr
+	jsl NLService
+@InfoEx	jmp crout
+
+InfoNone	dc.b '--no entry found--',0
+
+InfoLkupParms
+SectionNum	dc.w 0
+InfoLkupData	dc.l 0
+	dc.l lookupBuff
+
+lookupBuff	ds.b 256
+
+	EndP
+
+
+****************************************************************************
+*
+* CheckPatch - Checks the passed toolbox dispatch vector to see if it
+*              points to a valid patch.
+*
+* Input: Passed via the stack following C conventions.
+*     newPatchAddr (long) - Address of the patch routine.
+*
+* Output:
+*     If newPatchAddr is a valid patch -
+*          Carry clear
+*     If newPatchAddr is not a valid patch -
+*          Carry set
+*
+****************************************************************************
+CheckPatch	proc
+
+CheckPtch	name
+
+zprtl	equ $01		; The address for the rtl on our direct page.
+newPatchAddr	equ zprtl+3		; Address of patch (parameter to this routine).
+
+	tsc		; Make the stack the direct page after saving
+	phd		; the current direct page.
+	tcd
+
+	lda newPatchAddr+2		; Simple check to check for a valid pointer.
+	and #$ff00
+	bne BadPatch		; Wasn't zero, can't be a valid pointer.
+	
+	lda [newPatchAddr]		; Check for the first JML instruction.
+	and #$00ff
+	cmp #$005c
+	bne BadPatch
+	
+	ldy #$04		; Check for the second JML instruction.
+	lda [newPatchAddr],y
+	and #$00ff
+	cmp #$005c
+	bne BadPatch
+	
+	ldy #$08		; Check for the third JML instruction.
+	lda [newPatchAddr],y
+	and #$00ff
+	cmp #$005c
+	bne BadPatch
+	
+	ldy #$0c		; Check for the fourth JML instruction.
+	lda [newPatchAddr],y
+	and #$00ff
+	cmp #$005c
+	bne BadPatch
+	
+	ldy #$10		; Check for the rtl and phk instructions.
+	lda [newPatchAddr],y
+	cmp #$4b6b
+	bne BadPatch
+	
+	iny		; Check for the phk and pea instructions.
+	lda [newPatchAddr],y
+	cmp #$f44b
+	bne BadPatch
+	
+	clc		; Calculate the address of the rtl instruction.
+	lda newPatchAddr
+	adc #$000f
+	ldy #$13		; Check for address of the rtl instruction.
+	cmp [newPatchAddr],y
+	bne BadPatch
+	
+GoodPatch	pld		; Restore the direct page and report
+	clc		; that it was a good patch.
+	rtl
+
+BadPatch	pld		; Restore the direct page and report
+	sec		; that something was wrong.
+	rtl
+	
+	endp
+
+****************************************************************************
+*
+* InstallE10000	- Sets the jump vector at $e10000 and $e10004 to point to
+*                 the passed new toolbox dispatch vector patch.  This routine
+*                 also updates the linked lists so that more than one routine
+*                 can be patched into the dispatch vectors.
+*
+* Input: Passed via the stack following C conventions.
+*     newPatchAddr (long) - Address of the patch routine.
+*
+* Output:
+*     If an error occured -
+*          Carry set, Accumulator contains one of the following error codes:
+*               badHeaderError
+*     If no error occured and patch was installed successfully -
+*          Carry clear, Accumulator contains zero.
+*
+****************************************************************************
+InstallE10000	proc
+
+InstalE10000	name
+
+oldPatchAddr	equ $01		; Address of existing patch.
+zprtl	equ oldPatchAddr+4		; The address for the rtl.
+zpsize	equ zprtl-oldPatchAddr	; Size of direct page we'll have on the stack.
+newPatchAddr	equ zprtl+3		; Address of patch (parameter to this routine).
+
+	tsc		; Move the stack pointer to point beyond
+	sec		; the direct page variables that we'll
+	sbc #zpsize		; place on the stack.
+	tcs
+	phd		; Save the direct page register.
+	tcd		; Set the direct page.
+	php		; Disable interrupts
+	sei
+	
+	pei newPatchAddr+2		; Check if patch header is valid.
+	pei newPatchAddr
+	jsl CheckPatch
+	plx		; Remove the parameters from the stack.
+	plx
+	bcc @1		; Report the badHeaderError if detected.
+	ldy #badHeaderError
+	jmp Exit
+
+@1	lda dispatch1		; Set up the next1Vector in the new patch.
+	sta [newPatchAddr]		; The JML instruction and low byte.
+	lda dispatch1+2
+	ldy #$02
+	sta [newPatchAddr],y	; The middle and upper bytes.
+	
+	lda dispatch2		; Set up the next2Vector in the new patch.
+	ldy #$04
+	sta [newPatchAddr],y	; The JML instruction and low byte.
+	lda dispatch2+2
+	ldy #$06
+	sta [newPatchAddr],y	; The middle and upper bytes.
+	
+	lda dispatch1+3		; See if there's already a patch in dispatch1.
+	and #$00ff
+	sta oldPatchAddr+2
+	pha		; High byte of possible header address.
+	lda dispatch1+1
+	sec
+	sbc #$0011
+	sta oldPatchAddr
+	pha		; Low byte of possible header address.
+	jsl CheckPatch
+	plx
+	plx
+	bcs First		; JIF this will be the first patch installed.
+
+	ldy #$08		; Set up the dispatch1Vector in the new patch.
+	lda [oldPatchAddr],y
+	sta [newPatchAddr],y	; The JML instruction and low byte.
+	ldy #$0a
+	lda [oldPatchAddr],y
+	sta [newPatchAddr],y	; The middle and upper bytes.
+	
+	ldy #$0c		; Set up the dispatch2Vector in the new patch.
+	lda [oldPatchAddr],y
+	sta [newPatchAddr],y	; The JML instruction and low byte.
+	ldy #$0e
+	lda [oldPatchAddr],y
+	sta [newPatchAddr],y	; The middle and upper bytes.
+		
+	bra PatchIt		; Now patch dispatch1 and dispatch2.
+
+First	ldy #$08		; Set up the dispatch1Vector in the new patch.
+	lda dispatch1
+	sta [newPatchAddr],y	; The JML instruction and low byte.
+	ldy #$0a
+	lda dispatch1+2
+	sta [newPatchAddr],y	; The middle and upper bytes.
+	
+	ldy #$0c		; Set up the dispatch2Vector in the new patch.
+	lda dispatch2
+	sta [newPatchAddr],y	; The JML instruction and low byte.
+	ldy #$0e
+	lda dispatch2+2
+	sta [newPatchAddr],y	; The middle and upper bytes.
+
+PatchIt	clc		; Calculate the address of the new dispatch2.
+	lda newPatchAddr
+	adc #$0015
+	sta newPatchAddr
+	xba
+	and #$ff00		; Mask in the JML instruction.
+	ora #$005c
+	sta dispatch2		; The JML instruction and low byte.
+	lda newPatchAddr+1
+	sta dispatch2+2		; The middle and upper bytes.
+	
+	sec		; Calculate the address of the new dispatch1.
+	lda newPatchAddr
+	sbc #$0004
+	sta newPatchAddr
+	xba
+	and #$ff00		; Mask in the JML instruction
+	ora #$005c
+	sta dispatch1		; The JML instruction and low byte
+	lda newPatchAddr+1
+	sta dispatch1+2		; The middle and upper bytes
+	
+	ldy #noError		; Report that all went well
+
+Exit	plp		; Restore the interrupt state
+	pld		; Restore the previous direct page register
+	tsc		; Restore the stack pointer
+	clc
+	adc #zpsize
+	tcs
+	tya		; Value to return
+	beq @noerr
+	sec		; Report that there was an error
+	rtl
+@noerr	clc		; Report that there was no error
+	rtl
+	
+	endp
+
+****************************************************************************
+*
+* RemoveE10000 - Removes the specified patch from the dispatch1 and dispatch2
+*                vectors and updates the linked lists for the remaining
+*                toolbox patches.
+*
+* Input: Passed via the stack following C conventions.
+*     patchToRemove (long) - Address of the patch to remove.
+*
+* Output:
+*     If an error occured -
+*          Carry set, Accumulator contains one of the following error codes:
+*               badHeaderError
+*               headerNotFoundError
+*     If no error occured and patch was removed successfully -
+*          Carry clear, Accumulator contains zero.
+*
+****************************************************************************
+RemoveE10000	proc
+
+RemovE10000	name
+
+patchDispAddr	equ $01		; Address of existing patch (and 1 extra byte)
+prevHeader	equ patchDispAddr+5		; Used to search through the linked list
+zprtl	equ prevHeader+4		; The address for the rtl
+zpsize	equ zprtl-patchDispAddr	; Size of direct page we'll have on the stack
+patchToRemove	equ zprtl+3		; Address of patch (parameter to this routine)
+
+	tsc		; Move the stack pointer to point beyond
+	sec		; the direct page variables that we'll
+	sbc #zpsize		; place on the stack
+	tcs
+	phd		; Save the direct page register
+	tcd		; Set the direct page
+	php		; Disable interrupts
+	sei
+	
+	pei patchToRemove+2		; Check if patch header we were asked to
+	pei patchToRemove		; remove is a valid header
+	jsl CheckPatch
+	plx		; Remove the parameters from the stack
+	plx
+	bcc @1		; Report the badHeaderError if detected
+	ldy #badHeaderError
+	jmp Exit
+
+@1	clc		; Create the JML instruction that would exist
+	lda patchToRemove		; if the patchToRemove was installed
+	adc #$0011
+	sta patchDispAddr+1
+	lda patchToRemove+2
+	sta patchDispAddr+3
+	lda patchDispAddr		; Mask in the JML instruction
+	and #$ff00
+	ora #$005c
+	sta patchDispAddr
+	
+	cmp dispatch1		; Check if the patch to remove is the first
+	bne NotFirstOne		; patch installed
+	lda dispatch1+2
+	cmp patchDispAddr+2
+	bne NotFirstOne
+	
+	lda [patchToRemove]		; Restore the Dispatch1 vector
+	sta dispatch1
+	ldy #$02
+	lda [patchToRemove],y
+	sta dispatch1+2
+	
+	ldy #$04		; Restore the Dispatch2 vector
+	lda [patchToRemove],y
+	sta dispatch2
+	ldy #$06
+	lda [patchToRemove],y
+	sta dispatch2+2
+	
+	bra NoErr		; Everything went well
+	
+NotFirstOne
+	sec		; Assume that whatever's in dispatch1 is a
+	lda dispatch1+1		; patch and get the address of its header
+	sbc #$0011
+	sta prevHeader		; Low and middle bytes
+	lda dispatch1+3
+	and #$00ff
+	sta prevHeader+2		; Upper byte of header address
+	
+@loop	pei prevHeader+2		; Check if it really is a valid header
+	pei prevHeader
+	jsl CheckPatch
+	plx		; Remove the parameters from the stack
+	plx
+	bcc @2		; Report that the patch that we asked to
+	ldy #headerNotFoundError	; remove wasn't found
+	bra Exit
+
+@2	lda [prevHeader]		; See if this patch points to patch we want
+	cmp patchDispAddr		; to remove
+	bne @nope
+	ldy #$02
+	lda [prevHeader],y
+	cmp patchDispAddr+2
+	bne @nope
+	
+	lda [patchToRemove]		; Restore the next1Vector
+	sta [prevHeader]
+	ldy #$02
+	lda [patchToRemove],y
+	sta [prevHeader],y
+	
+	ldy #$04		; Restore the next2Vector
+	lda [patchToRemove],y
+	sta [prevHeader],y
+	ldy #$06
+	lda [patchToRemove],y
+	sta [prevHeader],y
+	
+	bra NoErr		; Everything went well
+
+@nope	ldy #$02		; Get the address of the next patch header
+	lda [prevHeader],y
+	tax
+	lda [prevHeader]
+	sta prevHeader
+	stx prevHeader+2
+	
+	sec
+	lda prevHeader+1
+	sbc #$11
+	sta prevHeader
+	lda prevHeader+3
+	and #$00ff
+	sta prevHeader+2
+	
+	bra @loop		; Now check this header
+
+NoErr	ldy #noError		; Report that all went well
+
+Exit	plp		; Restore the interrupt state
+	pld		; Restore the previous direct page register
+	tsc		; Restore the stack pointer
+	clc
+	adc #zpsize
+	tcs
+	tya		; Value to return
+	beq @noerr
+	sec		; Report that there was an error
+	rtl
+@noerr	clc		; Report that there was no error
+	rtl
+
+	endp
+			
+	END

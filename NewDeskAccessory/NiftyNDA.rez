@@ -1,0 +1,19 @@
+#include "typesiigs.r"
+
+read 1(1) "AppleII.8 font";
+
+/*	dc.b '>>  Edit  \N2'
+	dc.b '==Undo\*ZzN1001'
+	dc.b '==-\N9996'
+	dc.b '==Cut\*XxN1002'
+	dc.b '==Copy\*CcN1003'
+	dc.b '==Paste\*VvN1004'
+	dc.b '==Clear\N1005'
+	dc.b '.'
+
+	dc.b '>>  File  \N3'
+	dc.b '==Close\*WwN3002'
+	dc.b '==Close All\N3003'
+	dc.b '.'
+
+*/

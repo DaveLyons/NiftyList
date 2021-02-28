@@ -1,0 +1,35 @@
+*************************************************
+*
+* Ftype.NL for System Disk 5.0.2
+*
+* Dave Lyons, 16-Jul-90
+*
+*************************************************
+*
+* asmiigs ftype.nl.aii
+* linkiigs ftype.nl.aii.obj -o ftype.nl -t $42 -at $0101
+* makebiniigs -org 0 ftype.nl
+* duplicateiigs -mac ftype.nl :
+*
+*************************************************
+Wow	proc
+	include 'm16.util'
+Entries	equ 2
+*************************************************
+	org 0
+*************************************************
+	dc.w $100			;file fmt version 1.0
+	dc.w 0			;global flags
+	dc.w Entries
+	dc.w 0			;reserved
+	dc.w 10			;entries per byte
+	dc.w Index		;offset to index
+*************************************************
+Index	dc.w $BC,$4001,0,0,Module
+	dc.w $BC,$C001,0,0,DisMod
+*************************************************
+Module	str 'Nifty List module'
+DisMod	str 'Nifty List module (inactive)'
+*************************************************
+	endp
+	end

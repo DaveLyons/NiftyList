@@ -1,0 +1,21 @@
+nlClassifyAddr:  return "=" for tool.setup patches
+R: show the entire resource search path
+NL:  Have ` store the result into the current address.
+
+
+backup -from "#2:gsproj:nifty list" -to "dal:gsproj:nifty list"
+
+code analyzer: note "cmp #0, beq/bne"
+Big Brother--watchdog $00/BE00 to see if the GS/OS stack is getting whomped on!
+Accept finderSaysBeforeOpen to install additional modules (and kill old one w/ same name?)
+Goodies--dump a tagged-strings structure by handle.
+BB--need a "start tracing" option.  Talk w/ GSBug!
+BB--need a "don't break on this call any more" option.
+BB--check ShieldCursor flag on QuickDraw calls
+BB--flag insufficient stack space likely on tool calls
+BB--Get info from app about dp/stack size and location?
+Goodies: \ctls
+\fpdump -- dump the finder path list
+\leh -- dump a Line Edit record handle (make ;c use this??)
+BB--catch a TaskMaster call with the SystemEvent event record pointer
+

@@ -1,0 +1,279 @@
+**************************************************************
+**************************************************************
+*
+* Nifty List Sample module
+*
+* by David A. Lyons, 16-Jul-90
+*
+* Source code is in MPW IIgs Assembler format.
+*
+* REVISION HISTORY
+*
+* 4-Dec-91 DAL
+*   Added inline names (from m16.debug).
+*
+**************************************************************
+**************************************************************
+*
+* Here's a makefile for this module:
+*
+*  #   File:       sample.make
+*  #   Target:     sample
+*  #   Sources:    sample.aii 
+*  
+*  sample Ä sample.aii.obj
+*     LinkIIGS sample.aii.obj -o sample -at $4001 -t $bc
+*     DuplicateIIGS -y -mac sample :
+*  sample.aii.obj Ä sample.aii
+*     AsmIIGS -t sample.aii
+*
+**************************************************************
+
+DebugSymbols	equ 1
+
+cr	equ 13
+
+	include 'all.macros'
+	include '::E16.NList'
+	
+Module	PROC	;do NOT use an inline name here
+	Case off
+
+	dc.l myOpen
+	dc.l myClose
+	dc.l myAction
+	dc.l myInit
+	dc.w $0330	;minimum NL version we need
+	dc.w 0	;reserved (use 0)
+	dc.b '**Sample #1\',0 ;name in NDA format (not used now)
+	
+myInit	rtl	;not used now (just RTL)
+myClose	rtl	;not used now (just RTL)
+*
+* Open routine--return address of the module's info table
+*
+myOpen	lda #InfoRec>>16
+	sta 6,s
+	lda #InfoRec
+	sta 4,s
+	rtl
+*
+* Info Record
+*
+InfoRec	dc.w InfoEnd-InfoRec ;size of Info record
+	dc.w 0	;format (0)
+	dc.w 0	;patch type (0)
+	dc.l NLService	;address to patch
+	dc.w 12	;bytes per cmd in cmdTbl
+	dc.l cmdTbl	;command table
+InfoEnd
+*
+* Jump to NLService--This gets patched over by Nifty List
+* so that we can make JSLs to NLService and have them get
+* dispatched to Nifty List to do the work.
+*
+NLService dc.l $77777777
+*
+* Command Table--for each command in this module:
+*    +000:  pointer to command name (Pascal string)
+*    +004:  address of command entry point
+*    +008:  address of help routine
+*
+* (The first entry is for the module itself.)
+*
+cmdTbl	dc.l moduleName,0,HelpModule
+	dc.l nameOne,cmdOne,helpOne
+	dc.l nameShPurge,cmdShPurge,helpShPurge
+	dc.l 0
+
+moduleName	dc.b 6,'Sample'
+
+HelpModule	name
+	pushlong #AboutModule
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+
+AboutModule	dc.b 'Sample 0.0:',cr
+	dc.b '  \one',cr
+	dc.b '  \shpurge',cr
+	dc.b 0
+
+**************************************************************
+**************************************************************
+*
+* \one -- sample command number one
+*
+**************************************************************
+nameOne	dc.b 3,'one'
+
+helpOne	name
+	pushlong #helpOneMsg
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+
+helpOneMsg	dc.b '\one is sample command number one',cr,0
+
+cmdOne	name
+	pushlong #theNumber
+	pea nlWriteCStr
+	jsl NLService
+	
+	jsr GetNum1
+	
+	pha
+	pha		;low word is used
+	pea nlWriteWord
+	jsl NLService
+	jsr crout
+	
+	rtl
+
+theNumber	dc.b 'The number is ',0
+
+**************************************************************
+**************************************************************
+*
+* n\shpurge -- show handles with specified purge level
+*
+**************************************************************
+nameShPurge	dc.b 7,'shpurge'
+
+helpShPurge	pushlong #msgHPurge
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+msgHPurge	dc.b 'nn\shpurge shows handles with given purge level',cr,0
+
+cmdShPurge	name
+	jsr GetNum1
+	sta targetLevel
+
+	jsr ShowMemHdr
+
+	pushlong #scanParms
+	pea nlScanHandles
+	jsl NLService
+	rtl
+*
+* Parameters to nlScanHandles
+*
+scanParms	dc.w 0		;0 = do allocated handles
+	dc.l InfoRec	;byte +2 used for setting bank reg
+	dc.l PurgeFilter	;call this for every handle
+*
+* Show header for dumping handle info.  Write the line of dashes
+* only if the >v parameter is off (for voice synthesizers).
+*
+ShowMemHdr	name
+	pushlong #memHdr
+	pea nlWriteCStr
+	jsl NLService
+	pushlong #memHdr2
+	pea nlWriteNoVoice
+	jsl NLService
+	rts
+
+memHdr	DC.B	'handle addr   size   flgs ownr path',cr,0
+memHdr2	DC.B	'------ ------ ------ ---- ---- ----',cr,0
+
+targetLevel	dc.w 0
+*
+* PurgeFilter--called by NL once for every handle in the chain
+*
+PurgeFilter	name		;called with handle (pascal style)
+	phd
+	tsc
+	tcd		;handle is at 6
+	ldy #4		;offset to flags
+	lda [6],y
+	and #$0300
+	xba
+	cmp targetLevel
+	bne noPrint
+
+	pei 8
+	pei 6
+	pea nlHandleInfo
+	jsl NLService
+
+noPrint	pld
+	lda 2,s
+	sta 6,s
+	lda 1,s
+	sta 5,s
+	pla
+	pla
+	rtl
+
+
+**************************************************************
+**************************************************************
+*
+* Action -- A=action code,  YX may point to some data
+*
+* This gets called with A=
+*   actBirth   -- when the module is loaded
+*   actDeath   -- when the moudle is unloaded
+*   actEnterNL -- every time the user enters Nifty List
+*   aceExitNL  -- every time the user leaves Nifty List
+*
+**************************************************************
+myAction	name
+	lda #0	;return value is reserved for now--use 0
+	rtl
+
+**************************************************************
+**************************************************************
+*
+* misc subroutines
+*
+**************************************************************
+spout	name
+	pha
+	pha
+	pea nlSpout
+	jsl NLService
+	rts
+
+crout	name
+	pha
+	pha
+	pea nlCrout
+	jsl NLService
+	rts
+
+cout	name
+	pha
+	pha
+	pea nlWriteChar
+	jsl NLService
+	rts
+
+prword	name
+	pha
+	pha
+	pea nlWriteWord
+	jsl NLService
+	rts
+
+prbyte	name
+	pha
+	pha
+	pea nlWriteByte
+	jsl NLService
+	rts
+
+GetNum1	name
+	pha
+	pha
+	pushlong #nlgNUM1
+	pea nlGetAGlobal
+	jsl NLService
+	pla
+	ply
+	rts
+
+	ENDP
+	END

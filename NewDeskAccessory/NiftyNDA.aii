@@ -1,0 +1,1258 @@
+*******************************************************************************
+*
+* buffer output for speed
+* menu bar
+* status area in info bar--callback for current command name
+* handle error conditions! (like Nifty List not found!)
+*
+*******************************************************************************
+*
+* Nifty NDA
+*
+* An NDA interface to Nifty List (3.1 and later).
+*
+* Copyright 1990-91 David A. Lyons
+* All Rights Reserved
+*
+*******************************************************************************
+*
+* REVISION HISTORY
+*
+* 9-Feb-91 DAL --> v1.0d3
+*   Made Enter execute current line if there is no selection.
+*   Made Apple-Return be like Enter.
+*   
+* 1-Jun-91 DAL --> v1.0d4
+*   Now we detach and keep the font handle around, so we don't fry the
+*     second time we're opened.
+*
+*******************************************************************************
+	include 'all.macros'
+	include '::E16.nlist'
+	include 'E16.Event'
+
+rMyFont	equ 1
+MyFontResID	equ 1
+MyFontFamNum	equ $1966
+
+StatusWidth	equ 50
+
+CmdBufferLength	equ 512
+
+*******************************************************************************
+*
+* NDA header
+*
+*******************************************************************************
+NiftyNDA	proc export
+
+	dc.l NDAOpen	; Pointer to the open routine
+	dc.l NDAClose	; Pointer to the close routine
+	dc.l NDAAction	; Pointer to the action routine glue
+	dc.l NDAInit	; Pointer to the init routine glue
+NDAPeriod	dc.w $0008	; How often the NDA gets run actions
+NDAEventMask	dc.w $FFFF	; Describes what events the NDA wants
+	dc.b '**'	; two place-holding characters
+NDAMenuLine	dc.b 'Nifty List'	; A default NDA menu item name
+	dc.b '\H**'	; \H and two place-holding characters
+	dc.b 0	; The menu item string terminator
+*******************************************************************************
+MyID	dc.w 0
+MyWindPtr	dc.l 0
+MyTEControl	dc.l 0
+MyNLSessRef	dc.l 0
+myResFile	dc.w 0	;this is 0 if our resource fork isn't open
+MyFontH	dc.l 0
+MyMenuBar	dc.l 0
+
+WeStartedTE	dc.w 0
+TEdirPageH	dc.l 0
+TEdirPagePtr	dc.w 0
+
+WeStartedFM	dc.w 0
+FMdirPageH	dc.l 0
+FMdirPagePtr	dc.w 0
+*******************************************************************************
+
+
+*******************************************************************************
+*
+* Init
+*
+* A=0  for shutdown
+* A<>0 for startup
+*
+*******************************************************************************
+NDAInit	phb
+	phk
+	plb
+
+	sta @code
+
+	pha
+	_MMStartUp
+	pla
+	ora #$0100
+	sta MyID
+
+	lda @code
+	bne @startup
+	jsr ndaShutdown
+	bra @exit
+@startup	jsr ndaStartup
+
+@exit	plb
+	rtl
+
+@code	dc.w 0
+
+ndaStartup	rts
+
+ndaShutdown	lda WeStartedTE
+	beq @noTE
+	stz WeStartedTE
+
+	_TEShutDown
+	pea $22
+	_UnloadOneTool
+	pushlong TEdirPageH
+	_DisposeHandle
+	
+@noTE	lda WeStartedFM
+	beq @noFM
+	stz WeStartedFM
+
+	_FMShutDown
+	pea $1b
+	_UnloadOneTool
+	pushlong FMdirPageH
+	_DisposeHandle
+
+@noFM	rts
+
+*******************************************************************************
+*
+* NDAOpen--returns window pointer on stack
+*
+*******************************************************************************
+result	equ  5	;RTL address and B on the stack already
+
+NDAOpen	phb
+	phk
+	plb
+	lda #0
+	sta 5,s
+	sta 7,s	;anticipate no window
+
+	pha
+	pha
+	_GetPort
+	pla
+	sta oldPort
+	pla
+	sta oldPort+2
+
+	pha
+	_GetCurResourceApp
+	pla
+	sta oldResApp
+	bcc @ok1
+	brl @error	;possible if Resource Mgr not here!
+@ok1
+
+	jsr GetFontMgr
+	bcs @error0
+
+	jsr GetTextEdit
+@error0	bcc @1
+	brl @error
+@1
+	pha
+	_MMStartUp
+	_ResourceStartUp
+
+* for OpenResourceFile, push requested access, map handle (0), and pathname
+
+	pha	;space for OpenResourceFile result
+	pea 1	;request reqd access on OpenResourceFile
+
+	lda #0
+	pha
+	pha	;pushed 0 for resource map
+
+	pha
+	pha	;pushed room for LGetPathname2 result
+	pha	;room for Memory ID
+	_MMStartUp
+	pea 1
+	_LGetPathname2
+	jsr GetAndZeroLevel	;does not mess with stack
+	jsr GetAndFixPrefs
+	_OpenResourceFile
+	php
+	jsr RestorePrefs
+	jsr RestoreLevel	;does not mess with stack
+	plp	;restore Carry from OpenResourceFile call
+	pla
+	bcc @ok
+	brl @error
+@ok	sta myResFile
+
+	jsr MakeWindow
+	bcs @error
+	stx MyWindPtr+2
+	sta MyWindPtr
+
+	pha
+	pha
+	pea $ffff
+	pea $ffff
+	_NewMenuBar
+	ply
+	pla
+	sta MyMenuBar+2
+	sty MyMenuBar
+	pha
+	phy
+	jsr PushWindPtr
+	_SetInfoRefCon
+
+; 	%%% need to set menu bar rect, etc.
+
+	jsr PushWindPtr
+	_SetSysWindow
+
+	jsr PushWindPtr
+	_SetPort
+
+	jsr GetMyFont
+
+	jsr MakeControls
+
+	lda MyWindPtr+2
+	sta 7,s
+	lda MyWindPtr
+	sta 5,s
+
+	jsr OpenNLSession
+
+@error	lda oldResApp
+	pha
+	_SetCurResourceApp	;restore ResourceApp
+
+	pushlong oldPort
+	_SetPort
+
+	jsr PushWindPtr
+	_DrawInfoBar
+
+	plb
+	rtl
+
+oldResApp	dc.w 0
+oldPort	dc.l 0
+
+*******************************************************************************
+*
+* GetMyFont
+*
+*******************************************************************************
+GetMyFont
+
+* %%% should probably try InstallFont first in case they already have it
+
+	lda MyFontH+1
+	bne @alreadyHaveHandle
+
+	pha
+	pha
+	pea rMyFont
+	pushlong #myFontResID
+	_LoadResource
+	ply
+	pla
+	bcs @noFont
+
+	sta MyFontH+2
+	sty MyFontH
+
+	pha
+	phy
+	pushlong #FontName
+	pushlong #32
+	_HandToPtr
+
+	jsr StripPString
+
+	pea rMyFont
+	pushlong #myFontResID
+	_DetachResource
+
+@alreadyHaveHandle
+
+* If the Font Manager already knows about my font, don't install it again
+
+	pushlong #$08001966
+	pea 0
+	pea 1
+	pushlong #myFontStatRec
+	_FindFontStats
+	bcs @installMe
+
+	lda fontSpecBits
+	bpl @alreadyInstalled
+
+@installMe	pea MyFontFamNum
+	pushlong #FontName
+	_AddFamily
+
+	pushlong MyFontH
+	pea 0	;new specs
+	_AddFontVar
+
+@alreadyInstalled
+@noFont	rts
+
+myFontStatRec	dc.l 0
+fontSpecBits	dc.w 0	;bit 15 will be set if our font isn't here
+
+STripPString	phd
+	pushlong MyFontH
+	tsc
+	tcd
+	lda [1]
+	tax
+	ldy #2
+	lda [1],y
+	sta 3
+	stx 1
+	lda [1]
+	and #$00ff
+	sta @length
+	sec
+	adc 1
+	tax
+	lda 3
+	adc #0
+	ply
+	ply
+	pld
+
+	pha
+	phx
+	pushlong MyFontH
+	pha
+	pha	;space for GetHandleSize
+	pushlong MyFontH
+	_GetHandleSize
+	pla
+	plx
+	clc
+	sbc @length
+	tay
+	txa
+	sbc #0
+	pha
+	phy
+	_PtrToHand
+
+	rts
+
+@length	dc.w 0
+FontName	ds.b 32
+
+*******************************************************************************
+*
+* GetTextEdit
+*
+*******************************************************************************
+GetTextEdit	pea 0
+	_TEStatus
+	pla
+	bne @ok
+
+	pea $22
+	pea 0
+	_LoadOneTool
+	bcs @exit
+
+	pha
+	pha
+	pushlong #$100	;one page for TE
+	lda MyID
+	pha
+	pea $c015	;attributes
+	pea 0
+	pea 0
+	_NewHandle
+	phd
+	tsc
+	tcd
+	lda [3]
+	tax	;pointer in X
+	pld
+	pla
+	sta TEdirPageH
+	pla
+	sta TEdirPageH+2
+	stx TEdirPagePtr
+	bcs @exit
+
+	lda MyID
+	pha
+	lda TEdirPagePtr
+	pha
+	_TEStartUp
+
+	inc WeStartedTE
+
+@ok	clc
+@exit	rts
+
+*******************************************************************************
+*
+* GetFontMgr
+*
+*******************************************************************************
+GetFontMgr	pea 0
+	_FMStatus
+	pla
+	bne @ok
+
+	pea $1b
+	pea 0
+	_LoadOneTool
+	bcs @exit
+
+	pha
+	pha
+	pushlong #$100	;one page for FM
+	lda MyID
+	pha
+	pea $c015	;attributes
+	pea 0
+	pea 0
+	_NewHandle
+	phd
+	tsc
+	tcd
+	lda [3]
+	tax	;pointer in X
+	pld
+	pla
+	sta FMdirPageH
+	pla
+	sta FMdirPageH+2
+	stx FMdirPagePtr
+	bcs @exit
+
+	lda MyID
+	pha
+	lda FMdirPagePtr
+	pha
+	_FMStartUp
+
+	inc WeStartedFM
+
+@ok	clc
+@exit	rts
+
+*
+* MakeWindow--return pointer in XA
+*
+MakeWindow	pha
+	pha	;space for result
+	pushlong #nwParms
+	_NewWindow
+	pla
+	plx
+	rts
+
+nwParms	dc.w nwEnd-nwParms	;length
+	dc.w $C1B0	;frame
+	dc.l myTitle	;title
+	dc.l 0	;refcon
+	dc.w 0,0,0,0	;zoom rect
+	dc.l 0	;color table
+	dc.w 0,0	;origin
+	dc.w 0,0	;data height & width
+	dc.w 1000,1000	;max height & width
+	dc.w 0,0	;scroll ver & scroll hor
+	dc.w 0,0	;page ver, page hor
+	dc.l 0	;info refcon
+	dc.w 14	;info height
+	dc.l 0	;defproc
+	dc.l myInfoDraw	;info defproc
+	dc.l myContentDraw	;content defproc
+	dc.w 40,30,140,590	;position rectangle
+	dc.l $ffffffff	;plane (front)
+	dc.l 0	;storage
+nwEnd
+
+myTitle	dc.b 16,' Nifty List NDA '
+
+*
+* myContentDraw
+*
+myContentDraw	pha
+	pha
+	_GetPort
+	_DrawControls
+	rtl
+*
+* myInfoDraw
+*
+theWindow	equ 7
+infoRefCon	equ 11
+infoRect	equ 15
+
+myInfoDraw	phb
+	phk
+	plb
+	phd
+	tsc
+	tcd
+	lda <infoRefCon+1
+	bne @1
+	brl @done
+@1
+	pea 2
+	pea 1
+	_SetPenSize
+	ldy #2
+	lda [infoRect],y
+	sta infoLeft
+	clc
+	adc #StatusWidth
+	pha
+	lda [infoRect]
+	pha
+	_MoveTo
+	pea 0
+	pea 14
+	_Line
+	_PenNormal
+
+
+	pha	;space for StringWidth
+	pushlong #statusString
+	_StringWidth
+	pla
+	lsr a
+	eor #$ffff
+	sec
+	adc infoLeft
+	adc #statusWidth/2
+	pha	;x coord
+	
+	ldy #4
+	lda [infoRect],y
+	dec a
+	dec a
+	pha	;y coord
+	_MoveTo
+	pushlong #statusString
+	_DrawString
+
+	pei infoRefCon+2
+	pei infoRefCon
+	_SetMenuBar
+	_DrawMenuBar
+	lda #0
+	pha
+	pha
+	_SetMenuBar
+
+@done	pld
+	plb
+
+; pull 12 bytes off stack
+	lda 2,s
+	sta 2+12,s
+	lda 1,s
+	sta 1+12,s
+	pla
+	pla
+	pla
+	pla
+	pla
+	pla
+	rtl
+
+infoLeft	dc.w 0
+
+statusString	dc.b 5,'Blah!'
+	ds.b 32	;%%%
+
+*
+* PushWindPtr -- put window pointer on stack above RTS address
+*
+PushWindPtr	plx
+	lda MyWindPtr+2
+	pha
+	lda MyWindPtr
+	pha
+	phx
+	rts
+
+MakeControls	pha
+	pha	;space for result
+	jsr PushWindPtr
+	pea 0	;ptr to template
+	pushlong #teTemplate
+	_NewControl2
+	pla
+	sta MyTEControl
+	pla
+	sta MyTEControl+2
+
+	pea $40
+	pushlong #myStyle
+	pea 0
+	pea 0
+	_TEStyleChange
+
+	rts
+
+myStyle	dc.w myFontFamNum,$0800
+	dc.l 0,0
+
+teTemplate	dc.w 23	;parm count
+	dc.l 1	;control id
+	dc.w 0,0,0,0	;rectangle
+	dc.l $85000000	;procref
+	dc.w 0	;flags
+	dc.w $7c00	;moreflags
+	dc.l 0	;refcon
+	dc.l $72280000	;textflags
+	dc.w $ffff,$ffff,$ffff,$ffff  ;indent rect
+	dc.l $ffffffff	;vert bar
+	dc.w 0	;vert amount
+	dc.l 0	;horz bar
+	dc.w 0	;horz amount
+	dc.l 0	;style ref
+	dc.w 0	;text descriptor
+	dc.l 0	;text ref
+	dc.l 0	;text length
+	dc.l 0	;max length
+	dc.l 0	;max lines
+	dc.w 0	;max chars per line
+	dc.w 0	;max height
+	dc.l 0	;color ref
+	dc.w 0	;draw mode
+	dc.l 0	;filter proc ptr
+
+*******************************************************************************
+*
+* NDAClose
+*
+*******************************************************************************
+NDAClose	phb
+	phk
+	plb
+	lda MyWindPtr+1
+	beq @notOpen
+
+	pha
+	pha
+	pushlong MyNLSessRef
+	pea nlKillSession
+	jsl NLService
+	pla
+	pla
+
+	jsr PushWindPtr
+	_CloseWindow
+	stz MyWindPtr
+	stz MyWindPtr+2
+
+	lda myResFile
+	beq @resNotOpen
+	jsr GetAndZeroLevel
+	
+	lda myResFile
+	pha
+	_CloseResourceFile
+	jsr RestoreLevel
+@resNotOpen
+	_ResourceShutDown
+	
+@notOpen	plb
+	rtl
+
+*******************************************************************************
+*
+* NDAAction
+*
+* A=action
+* YX=pointer
+*
+*******************************************************************************
+NDAAction	phd
+	phb
+	phk
+	plb
+	pha	;action = <5
+	phy	;ptr high = <3
+	phx	;ptr low = <1
+	tsc
+	tcd
+	pha
+	pha
+	_GetPort	;leave old port on stack
+	jsr PushWindPtr
+	_SetPort
+	lda 5
+	asl a
+	tax
+	cmp #actionEnd-actionTable
+	bcs @tooBig
+	jsr (actionTable,x)
+@tooBig	_SetPort	;restore old port
+	plx	;pull ptr low
+	plx	;pull ptr high
+	plx	;pull action
+	plb
+	pld
+	rtl
+
+actionTable	dc.w null	;0 = unused
+	dc.w doEvent	;1 = eventAction
+	dc.w doRun	;2 = runAction
+	dc.w doCursor	;3 = cursorAction
+	dc.w null	;4 = unused
+	dc.w doUndo	;5 = undoAction
+	dc.w doCut	;6 = cutAction
+	dc.w doCopy	;7 = copyAction
+	dc.w doPaste	;8 = pasteAction
+	dc.w doClear	;9 = clearAction
+actionEnd
+
+doRun
+doCursor
+doUndo
+null	rts
+
+doEvent	pei 3
+	pei 1
+	pushlong #myTaskRec
+	pushlong #16
+	_BlockMove
+
+	lda myTaskWhat
+	cmp #keyDownEvt
+	bne @notKey
+	lda myTaskMods
+	and #$0100	;Apple key down?
+	beq @notAppleKey
+	lda myTaskMsg
+	and #$00ff
+	cmp #'w'
+	beq @AppleW
+	cmp #'W'
+	beq @AppleW
+
+	cmp #$000d	;Apple-Return?
+	beq @isCommand
+
+	bra @notKey
+
+@AppleW	jsr PushWindPtr
+	_CloseNDAByWinPtr
+	rts
+
+@notAppleKey	lda myTaskMods
+	and #$2000
+	beq @notKeypad
+	lda myTaskMsg
+	and #$00ff
+	cmp #$0d
+	bne @notCommand
+@isCommand	jsr DoNLCommand
+	rts
+
+@notCommand
+@notKeypad
+@notKey	pha	;result space
+	pha	;result space
+	pushlong #myTaskRec
+	_TaskMasterDA
+	pla
+	rts
+
+myTaskRec
+myTaskWhat	dc.w 0
+myTaskMsg	dc.l 0
+	dc.l 0	;when
+myTaskWhere	dc.w 0,0
+myTaskMods	dc.w 0
+myTaskData	dc.l 0
+myTaskMask	dc.l $001fffff	;everything (5.0.3)
+	dc.l 0	;lastClickTick
+	dc.w 0	;click count
+	dc.l 0	;task data 2
+	dc.l 0	;task data 3
+	dc.l 0	;task data 4
+	dc.w 0,0	;last click point
+
+doCut	pea 0
+	pea 0
+	_TECut
+	rts
+
+doCopy	pea 0
+	pea 0
+	_TECopy
+	rts
+
+doPaste	pea 0
+	pea 0
+	_TEPaste
+	rts
+
+doClear	pea 0
+	pea 0
+	_TEClear
+	rts
+
+*******************************************************************************
+*
+* OpenNLSession
+*
+*******************************************************************************
+OpenNLSession	jsr FindNLService
+	bcs @exit
+
+	pha
+	pha
+	pea 0
+	pea 0
+	pea nlLoadStuff	;load the data file
+	jsl NLService
+	pla
+	pla
+
+	pha
+	pha	;space for session ref
+	pushlong #myCallBack
+	pea nlNewSession
+	jsl NLService
+	pla
+	sta myNLSessRef
+	pla
+	sta myNLSessRef+2
+
+	jsr SetMySession
+
+	pushlong #myVerString
+	pea nlWriteCStr
+	jsl NLService
+	pea 0
+	pea 0
+	pea nlWelcome
+	jsl NLService
+
+	jsr RestoreSession
+
+@exit	rts
+
+myVerString	dc.b '[NDA Version 1.0d4, 1-Jun-91 DAL]',13,0
+
+SetMySession	plx
+	stx @rts
+	pha
+	pha	;space for old session ref
+	pushlong myNLSessRef
+	pea nlSetSession
+	jsl NLService
+	ldx @rts
+	phx
+	rts
+@rts	dc.w 0
+
+RestoreSession	plx
+	stx @rts	;sessref already on stack
+	lda 3,s
+	pha
+	lda 3,s
+	pha
+	pea nlSetSession
+	jsl NLService
+	pla
+	pla	;old sessref
+	ldx @rts
+	phx
+	rts
+@rts	dc.w 0
+
+*******************************************************************************
+*
+* DoNLCommand -- get the selection and execute it as a Nifty List command
+*
+*******************************************************************************
+DoNLCommand	jsr SetMySession
+
+	pha
+	pha
+	_GetCursorAdr
+	_WaitCursor
+
+	jsr TryToGetText
+	tay
+	bne @NotEmpty
+
+	jsr SelectThisLine
+	jsr TryToGetText
+@NotEmpty
+
+	pha
+	pha
+	pea nlCrout
+	jsl NLService
+
+* %%% Really need to get the selection into a big handle and break it
+* %%% into separate commands
+
+	tdc
+	sta theDP
+	tsc
+	sta theStack
+
+	pha
+	pha
+	pushlong #CmdBuffer
+	pea nlExecCmdLine
+	jsl NLService
+	pla
+	pla
+
+DoAbort	phk
+	plb
+	lda theStack
+	tcs
+	lda theDP
+	tcd
+
+	_SetCursor
+
+	jsr RestoreSession
+	rts
+
+*
+* TryToGetText--return length in XA
+*
+TryToGetText	pha
+	pha	;space for result (length)	
+	pea $22	;selection only + pointer to class-1 string
+	pushlong #CmdBuffer
+	pushlong #CmdBufferLength-1
+	pea 0
+	pea 0
+	pea 0
+	pushlong MyTEControl
+	_TEGetText
+	pla
+	plx
+	rts
+*
+* SelectThisLine
+*
+* Send an Option-LeftArrow and then an Option-Shift-RightArrow
+* to the Text Edit control to select the line the insertion point
+* is on.
+*
+SelectThisLine	lda #$0015	;right arrow
+	ldx #optionKey
+	jsr SendKeyToTE
+	lda #$0008	;left arrow
+	ldx #optionKey+shiftKey
+*
+* SendKeyToTE--key in A, modifiers in X
+*
+SendKeyToTE	sta MyTaskMsg
+	stx MyTaskMods
+	lda #keyDownEvt
+	sta MyTaskWhat
+	pha	;space for result
+	pea $ffff	;TargetOnlyFlag
+	pushlong MyWindPtr
+	pushlong #myTaskRec
+	_SendEventToCtl
+	pla	;result
+	rts
+*
+theStack	dc.w 0
+theDP	dc.w 0
+
+CmdBuffer	ds.b CmdBufferLength
+
+*******************************************************************************
+*******************************************************************************
+*
+* myCallBack(LongIn,code):LongOut
+*
+*******************************************************************************
+myCallBack	lda 4,s
+	tax
+	cpx #myCallsEnd-myCallbacks
+	bcs @bad
+	phb
+	phk
+	plb
+	jsr (myCallbacks,x)
+	plb
+@bad	lda 2,s
+	sta 8,s
+	lda 1,s
+	sta 7,s
+	pla
+	pla
+	pla
+	rtl
+
+myCallbacks	dc.w mcbOutput,mcbOutC,mcbFlush,mcbGetKey,mcbChkAbort
+	dc.w mcbAbort,mcbGetLine,mcbFunWindow,mcbDeath
+myCallsEnd
+
+*
+* cbOutput callback--input is a pointer to a GS/OS string
+*
+mcbOutput	phd
+	tsc
+	tcd
+	jsr SetSelEnd
+
+	pea 2	;text format (ptr to class-1 string)
+	pei $d	;text ref
+	pei $b	;text ref
+	pea 0	;text length
+	pea 0	;text length
+	pea 0	;style descriptor
+	pea 0	;style
+	pea 0	;style
+	pushlong MyTEControl
+	_TEInsert
+
+	pld
+	rts
+
+*
+* flush the output buffer
+*
+mcbFlush
+	rts
+
+* %%%
+
+aBuffUsed	dc.w 0
+* aBuffer	ds.b buffsize
+
+*
+* cbOutC callback--output a C String
+*
+mcbOutC	phd
+	tsc
+	tcd
+	jsr SetSelEnd
+
+	pea 1	;text format (ptr to C string)
+	pei $d	;text ref
+	pei $b	;text ref
+	pea 0	;text length
+	pea 0	;text length
+	pea 0	;style descriptor
+	pea 0	;style
+	pea 0	;style
+	pushlong MyTEControl
+	_TEInsert
+
+	pld
+	rts
+
+SetSelEnd	lda #$ffff
+	pha
+	pha
+	pha
+	pha
+	pushlong MyTEControl
+	_TESetSelection
+	rts
+
+*
+* cbGetKey--don't do anything.  Let NL supply a default keypress.
+*
+mcbGetKey	phd
+	tsc
+	tcd
+***	pha	;wordspace
+***	pea 0	;no echo
+***	_ReadChar
+***	pla
+***	and #$00ff
+***	sta [$B]
+	pld
+	rts
+
+mcbChkAbort
+***	jsr Pause
+	rts
+
+mcbAbort	jmp DoAbort
+
+mcbGetLine	brk $56
+	rts
+
+mcbFunWindow	phd
+	tsc
+	tcd
+	lda myWindPtr+2
+	sta @wind+2
+	lda myWindPtr
+	sta @wind
+@scan	pha
+	pha	;space for next window
+	lda @wind+2
+	pha
+	lda @wind
+	pha
+	_GetNextWindow
+	pla
+	sta @wind
+	pla
+	sta @wind+2
+	ora @wind
+	beq @done	
+	
+	pha	;space for window frame	
+	lda @wind+2
+	pha
+	lda @wind
+	pha
+	_GetWFrame
+	pla
+	and #$0020
+	beq @scan
+
+@done	lda @wind
+	sta [$b]
+	lda @wind+2
+	ldy #2
+	sta [$b],y
+	pld
+	rts
+
+@wind	dc.l 0
+
+mcbDeath	rts
+
+*******************************************************************************
+*
+* FindNLService--find the Nifty List service vector
+*
+* Return CLC = found
+*
+*******************************************************************************
+FindNLService	pha
+	pha
+	pea 0	;don't create message
+	pushlong #MsgBlock
+	_MessageByName
+	ply	;id of the NL message
+	pla	;flag (ignore)
+	bcs notFound
+
+	pea 2	;get message
+	phy	;message id
+	pha
+	pha	;space for NewHandle
+	lda #0
+	pha
+	pha
+	ldx MyID
+	phx	;id
+	pha	;attr
+	pha
+	pha
+	_NewHandle
+	lda 3,s
+	sta mcHandle+2
+	lda 1,s
+	sta mcHandle
+	_MessageCenter
+
+	pushlong mcHandle
+	phd
+	tsc
+	tcd
+	ldy #2
+	lda [3],y
+	tax
+	lda [3]
+	sta 3
+	stx 5
+
+	ldy #$28
+	lda [3],y
+	sta NLService+1
+	iny
+	lda [3],y
+	sta NLService+2
+	pld
+	pla
+	pla
+	pushlong mcHandle
+	_DisposeHandle
+	clc
+	rts
+notFound	sec
+	rts
+
+MsgBlock	dc.w MsgBlockEnd-MsgBlock
+	dc.b 31,'DAL Systems: Nifty List service'
+MsgBlockEnd
+
+NLService	jml >$777777
+mcHandle	dc.l 0
+
+
+*******************************************************************************
+*
+*
+* Miscellaneous subroutines
+*
+*
+*******************************************************************************
+GetAndZeroLevel	_GetLevelGS theOldLevel
+	_SetLevelGS levelZero
+	rts
+
+RestoreLevel	_SetLevelGS theOldLevel
+	rts
+
+theOldLevel	dc.w 1	;1 parameter
+	dc.w 0	;the old file level (modified)
+
+levelZero	dc.w 1	;1 parameter
+	dc.w 0	;zero
+
+
+GetAndFixPrefs	_GetSysPrefsGS oldPrefs
+	lda oldPrefs+2
+	and #$1fff	;keep the reserved bits
+	ora #$8000	;turn on Use Volume Mount Dialog
+	sta myPrefs+2
+	_SetSysPrefsGS myPrefs
+	rts
+
+RestorePrefs	_SetSysPrefsGS oldPrefs
+	rts
+
+oldPrefs	dc.w 1	;1 parameter
+	dc.w 0	;the old SysPrefs
+
+myPrefs	dc.w 1
+	dc.w 0	;my modified preferences
+
+	EndP
+
+	end

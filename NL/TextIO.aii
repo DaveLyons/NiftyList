@@ -1,0 +1,396 @@
+*********************************************************
+*
+* Nifty List Fast Text I/O routines
+*
+* Copyright 1991 David A. Lyons
+* All Rights Reserved
+*
+*********************************************************
+*
+* 13-Jan-91 DAL -- initial coding
+*
+* 14-Jan-91 DAL
+*   Made CtlH back up past the beginning of a line correctly.
+*
+* 27-Jan-91 DAL
+*   Made GetKey return correct bit 15 = apple key when the
+*     Event Manager is off.
+*
+* 30-May-91 DAL
+*   Added TxtGetState and TxtSetState
+*
+*********************************************************
+
+	include 'all.macros'
+
+TxtStartUp	proc export
+	export TxtOutChar
+	export TxtOutText
+	export TxtOutCString
+	export TxtReadChar
+	export TxtGetCursorV
+	export TxtGetState
+	export TxtSetState
+
+	lda #0
+	sta >CursorIndex
+	sta >CursorBank
+	sta >CursorV
+	jsr SetCurLine
+	rtl
+*
+* TxtOutChar -- character in A, no registers preserved
+*
+TxtOutChar	phb
+	phk
+	plb
+	ora #$0080
+	cmp #$00A0
+	bcc doCtlChar
+
+	ldx CursorBank
+	bne StoreOddPos
+
+StoreEvenPos	ldx CursorIndex
+	sep #$20
+CurLineCopy1	sta >$017777,X
+	rep #$20
+	inc CursorBank
+	plb
+	rtl
+
+StoreOddPos	ldx CursorIndex
+	sep #$20
+CurLineCopy2	sta >$007777,X
+	rep #$20
+	stz CursorBank
+	inc CursorIndex
+	lda CursorIndex
+	cmp #40
+	bcc @ok
+	jsr CtlM
+@ok	plb
+	rtl
+
+doCtlChar	and #$007f
+	asl a
+	tax
+	jsr (HandleCtls,x)
+	plb
+	rtl
+
+HandleCtls	dc.w rts,rts,rts,rts,rts,rts,rts,rts	;Ctl-@..Ctl-G
+	dc.w CtlH,rts,rts,rts,Home,CtlM,rts,rts	;Ctl-H..Ctl-O
+	dc.w rts,rts,rts,rts,rts,rts,rts,rts	;Ctl-P..Ctl-W
+	dc.w rts,rts,rts,rts,rts,rts,rts,rts	;Ctl-X..Ctl-_
+
+rts	rts
+
+CtlH	lda CursorBank
+	eor #1
+	sta CursorBank
+	beq @done
+	lda CursorIndex
+	dec a
+	sta CursorIndex
+	bpl @done
+	dec CursorV
+	bpl @okay
+	inc CursorV	;stay at the top line
+@okay	lda CursorV
+	jsr SetCurLine
+	lda #39
+	sta CursorIndex
+@done	rts
+
+CtlM	stz CursorBank
+	stz CursorIndex
+	inc CursorV
+	lda CursorV
+	cmp #24
+	bcc @ctlMOK
+	dec CursorV
+	jsr Scroll1Line
+@ctlMOK	lda CursorV
+SetCurLine	asl a
+	tax
+	lda ScrnPtrs,x
+	sta CurLineCopy1+1
+	sta CurLineCopy2+1
+	rts
+
+Home	jsr ClearScreen
+	rts
+
+*
+* TxtOutCString -- string pointer in AY, no registers preserved
+*
+TxtOutCString	phb
+	phk
+	plb
+	sty @cheat+1
+	sep #$20
+	sta @cheat+3
+	rep #$20
+@Loop
+@cheat	lda >$777777
+	and #$00ff
+	beq @done
+	jsl TxtOutChar
+	inc @cheat+1
+	bne @Loop
+	sep #$20
+	inc @cheat+3
+	rep #$20
+	bne @Loop
+@done	plb
+	rtl
+
+*
+* TxtOutText -- string pointer in AY, char count in X, no regs preserved
+*
+TxtOutText	phb
+	phk
+	plb
+	sty @cheat+1
+	sep #$20
+	sta @cheat+3
+	rep #$20
+	txa
+	beq @done
+@Loop	phx
+@cheat	lda >$777777
+	and #$00ff
+	jsl TxtOutChar
+	inc @cheat+1
+	bne @1
+	sep #$20
+	inc @cheat+3
+	rep #$20
+@1	plx
+	dex
+	bne @Loop
+@done	plb
+	rtl
+
+
+*
+* TxtReadChar -- return character in A
+*
+TxtReadChar	phb
+	phk
+	plb
+	jsr ShowCursor
+	jsr GetKey
+	pha
+	jsr EraseCursor
+	pla
+	plb
+	rtl
+
+GetKey	pea 0
+	_EMStatus
+	pla
+	bne @useEvent
+	sep #$30
+	longa off
+	longi off
+	phb
+	pea $e0e0
+	plb
+	plb
+
+@wait	lda |$C000
+	bpl @wait
+	asl a
+	ldx |$C025
+	sta |$C010	; that should help (DAL/MD 13 Jan 91)
+	cpx #$80
+	plb
+	rep #$30
+	longa on
+	longi on
+	and #$00ff
+	ror a
+	rts
+
+@useEvent	pha
+	pea $0028	;key down and autoKey only
+	pushlong #myEventRec
+	_GetNextEvent
+	pla
+	beq @useEvent
+
+	lda >MyModifiers
+	and #$0100
+	php
+	lda >MyMessage
+	and #$00ff
+	plp
+	beq @noApple
+	ora #$8000
+@noApple	rts
+
+myEventRec	dc.w 0	;what
+myMessage	dc.l 0
+myWhen	dc.l 0
+myWhere	dc.w 0,0
+myModifiers	dc.w 0
+*
+* ShowCursor -- make the character under the cursor inversed
+*
+ShowCursor	jsr FetchChar
+	sta underCursor
+	and #%01100000
+	cmp #%01000000
+	beq @noFlip
+	lda underCursor
+	and #$7f
+	bra StoreChar
+@noFlip	lda underCursor
+	and #$3f
+	bra StoreChar
+*
+* Erase cursor -- put the char under cursor back how it was
+*
+EraseCursor	lda underCursor
+StoreChar	ldx #$9F	;STA>,X
+	bra StoreOrFetch
+FetchChar	ldx #$BF	;LDA>,X
+StoreOrFetch	sep #$10
+	stx @cheat	;make @cheat into a LDA>,X or STA>,X
+	rep #$10
+	pha
+	lda CurLineCopy1+1
+	sta @cheat+1
+	pla
+	sep #$20
+	longa off
+	pha
+	lda CursorBank
+	eor #1
+	sta @cheat+3
+	pla
+	ldx CursorIndex
+@cheat	lda >$667777,x
+	rep #$20
+	longa on
+	and #$00ff
+	rts
+
+underCursor	dc.w 0
+
+*
+* Scroll1Line -- no inputs
+*
+Scroll1Line	ldx #2	;offset to line #1
+@copy1pair	phx
+	lda ScrnPtrs,x
+	sta @source1+1
+	sta @source2+1
+	lda ScrnPtrs-2,x
+	sta @dest1+1
+	sta @dest2+1
+	ldx #40-2
+@copy
+@source1	lda >$017777,x
+@dest1	sta >$017777,x
+@source2	lda >$007777,x
+@dest2	sta >$007777,x
+	dex
+	dex
+	bpl @copy
+	plx
+	inx
+	inx
+	cpx #24*2
+	bcc @copy1pair
+
+	ldx ScrnPtrs+23+23
+	ldy #20
+	lda #$A0A0
+@clearThisLine	sta >$000000,x
+	sta >$010000,x
+	inx
+	inx
+	dey
+	bne @clearThisLine
+
+	rts
+*
+* ClearScreen -- no inputs, homes cursor
+*
+ClearScreen	ldx #0
+@clear1line	phx
+	lda ScrnPtrs,x
+	tax
+	ldy #20
+	lda #$A0A0
+@clearThisLine	sta >$000000,x
+	sta >$010000,x
+	inx
+	inx
+	dey
+	bne @clearThisLine
+	plx
+	inx
+	inx
+	cpx #24*2
+	bcc @clear1line
+	stz CursorIndex
+	stz CursorBank
+	stz CursorV
+	lda #0
+	jsr SetCurLine
+	rts
+
+*
+* Private storage
+*
+CursorIndex	dc.w 0	;0..39
+CursorBank	dc.w 0	;0..1
+CursorV	dc.w 0	;0..23
+
+ScrnPtrs	DC.W $400,$480,$500,$580,$600,$680,$700,$780
+	DC.W $428,$4A8,$528,$5A8,$628,$6A8,$728,$7A8
+	DC.W $450,$4D0,$550,$5D0,$650,$6D0,$750,$7D0
+*
+* Provide access to CursorV location (0-based)
+*
+TxtGetCursorV	lda >CursorV
+	rts
+
+*
+* TxtGetState -- return state information in AX
+*
+TxtGetState	lda >CursorBank
+	lsr a
+	lda >CursorIndex
+	rol a
+	tax
+	lda >CursorV
+	rtl
+
+*
+* TxtSetState -- set state information from AX
+*
+TxtSetState	phb
+	phk
+	plb
+	sta CursorV
+	asl a
+	tay
+	txa
+	lsr a
+	sta CursorIndex
+	lda #0
+	rol a
+	sta CursorBank
+	lda CursorV
+	jsr SetCurLine
+	plb
+	rtl
+
+	EndP
+
+	END

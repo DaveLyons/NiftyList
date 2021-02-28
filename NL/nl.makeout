@@ -1,0 +1,8 @@
+Set Echo 1
+AsmIIGS -t nlist.aii
+AsmIIgs -t TextIO.aii
+LinkIIGS -t CDA ¶
+	nlist.aii.obj ¶
+	TextIO.aii.obj ¶
+	-o NiftyList.CDA
+DuplicateIIGS -mac -y NiftyList.CDA :

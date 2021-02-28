@@ -1,0 +1,4352 @@
+**************************************************************
+**************************************************************
+*
+* Nifty List Goodies module
+*
+* by David A. Lyons, begun 24-Nov-89
+*
+**************************************************************
+**************************************************************
+*
+* 6-Jul-90 DAL
+*   Added \getdp, \getmem, \release for easy on-the-fly memory
+*     allocation.
+*
+* 8-Jul-90 DAL
+*   Added \oomq, \runq, \notifyq, \queue to dump system queues.
+*     (The queue headers are not hard-coded--instead, these
+*     commands watch AddToQueue calls go by and note the head.)
+*   Added \err call to display data from Errors section.
+*
+* 14-Jul-90 DAL
+*   Added \find command by range or handle or ID.
+*   Changed \shpurge to use nlHandleInfo.
+*   Decorated the queue-dump commands (but they still don't
+*     print the queue-specific header fields).
+*   \getmem and \getdp display column headers now.
+*
+* 16-Jul-90 DAL
+*   Fixed \find to not stop looking one byte early.
+*
+* 16-Jul-90 DAL ==> v1.0
+*   Cleaned up spacing on =\ message.
+*   Known bugs:  \map prints garbage under P8.
+*
+* 25-Jul-90 DAL ==> v1.1d1
+*   Added \ids command.
+*
+* 28-Jul-90 DAL ==> v1.1d2
+*   Adding \fill, \compact, \frag.
+*
+* 30-Jul-90 DAL ==> v1.1d3
+*   (\fill not done yet)
+*   Added MaxBlock to \frag display.
+*
+* 1..2-Aug-90 DAL ==> v1.1d4
+*   Added \addnp and \delnp to add and delete a notify proc
+*     that dumps the parameters to the text screen when it
+*     gets called (waits for a keypress and continues).
+*     Note--should initialize text tools.  (Should REALLY do
+*     I/O through NL services, but currently can't.)
+*
+* 3-Aug-90 DAL ==> v1.1d5
+*   Modifying \map command to check resource maps for validity.
+*
+* 28-Aug-90 DAL ==> v1.1d6
+*   Added xxxx\ri command to display resources of a given type.
+*
+* 2-Sep-90 DAL ==> v1.1d7
+*   Made $BB a wildcard byte for \find.
+*
+* 27-Sep-90 DAL ==> v1.1d8
+*   Added \hsize command to show handles of a selected size.
+*   Fixed \ri to set the current resource app around the
+*     MatchResource call.
+*   Note:  0\ri shows all loaded resources.
+*
+* 20-Oct-90 DAL
+*   Changed tabs to 20.
+*
+* 2-Dec-90 DAL ==> v1.1d9
+*   Using m16.debug for imbedded names.
+*   PrepareText now sets up the text tools (but I'm not
+*     bothering to restore the state).
+*   Implemented \names command to find symbolic names
+*     in a specified range, handle, or ID memory.
+*   id\names only searches blocks with attributes that
+*     could reasonably contain code.
+*
+* 20-Dec-90 DAL ==> v1.1d10
+*   It's RETURN to continue, not SPACE (in \map).
+*
+* 8-Jan-91 DAL ==> v1.1
+*   Commented out stuff for unimplemented \fill command,
+*   changed version to 1.1 for release.
+*
+* 8-Jan-91 DAL ==> v1.2
+*   Removed a couple of stray backslash characters that made
+*   the assembler ignore a couple of lines!
+*
+* 12-Jan-91 DAL ==> v1.3d1
+*   Added \shrload and \shrsave commands.
+*
+* 13-Jan-91 DAL ==> v1.3d2
+*   Added \hcgs command for new data file section.
+*
+* 24-Jan-91 DAL ==> v1.3
+*   Took partial \fill stuff out again.
+*
+* 4-Feb-91 DAL ==> v1.4d1
+*   Added code to \shrsave and \shrload to use bank 1 if
+*     QD says shadowing is on (bit 15 of MasterSCB).
+*
+* 5-Feb-91 DAL ==> v1.4 (released)
+*
+* 8-Feb-91 DAL ==> v1.5d1
+*   Adding \res command to dump Resource Manager globals.
+*
+* 9-Feb-91 DAL
+*   Finished \res command.
+*
+* 31-May-91 DAL ==> 1.5d2
+*   Fixed \shrsave and \shrload to always use color table
+*     stuff from $E1, even if image is in bank 1.
+*   Fixed \files to display the fork number and level if
+*     available.
+*
+* 15-Jul-91 DAL ==> 1.5
+*
+* 26-Aug-91 DAL ==> 1.6d1
+*   Added new \reqcode command to display a request code.
+*
+* 6-Nov-91 DAL ==> 1.6d2
+*   Add \idinfo command to display summary of handles used
+*      by a given ID (1002\idinfo).
+*   Added \strings command to search for printable strings.
+*   Adding \fill command (again).
+*
+* 12-Dec-91 DAL ==> 1.6d3
+*   Adding \deskpat and \deskpic to set desktop message (2).
+*
+* 4-Mar-92 DAL ==> 1.6
+*   Released 1.6 for System 6.0.
+*
+* 18-Jan-93 DAL ==> 1.7d1
+*   Add \80save and \40save commands for saving the text
+*   screen.
+*
+* 6-Apr-93 DAL ==> 1.7d2
+*   Made \80save and \40save store MouseText as $80..9F
+*     (screen codes $40..5F).
+*   Added \tsave command to save the Nifty List 80-column
+*     text screen.
+*
+**************************************************************
+**************************************************************
+DebugSymbols	equ 0
+
+cr	equ 13
+
+	include 'all.macros'
+	include '::E16.NList'
+;;;	include 'm16.debug'
+	
+Module	PROC
+	Case off
+
+	dc.l myOpen,myClose,myAction,myInit
+	dc.w $0301		;min NL version
+	dc.w 0		;reserved
+	dc.b '**Nifty List Goodies #1\',0
+	
+myInit	rtl
+myClose	rtl
+*
+* Open routine--return address of the module's info table
+*
+myOpen	lda #InfoRec>>16
+	sta 6,s
+	lda #InfoRec
+	sta 4,s
+	rtl
+*
+* Info Record
+*
+InfoRec	dc.w InfoEnd-InfoRec	;size of Info record
+	dc.w 0		;format (0)
+	dc.w 0		;patch type (0)
+	dc.l NLService		;address to patch
+	dc.w 12		;bytes per cmd in cmdTbl
+	dc.l cmdTbl		;command table
+InfoEnd
+*
+* jump to NLService--patched over by Nifty List
+*
+NLService dc.l $77777777
+*
+* Command Table--for each command in this module:
+*    +000:  pointer to command name (Pascal string)
+*    +004:  address of command entry point
+*    +008:  address of help routine
+*
+* (The first entry is for the module itself.)
+*
+cmdTbl	dc.l moduleName,0,HelpModule
+	dc.l nameP8,cmdP8,helpP8
+	dc.l nameOS,cmdOS,helpOS
+	dc.l nameRType,cmdRType,helpRType
+	dc.l name00,cmd00,help00
+	dc.l name01,cmd01,help01
+	dc.l nameE0,cmdE0,helpE0
+	dc.l nameE1,cmdE1,helpE1
+	dc.l nameServ,cmdServ,helpServ
+	dc.l nameErr,cmdErr,helpErr
+	dc.l nameShP,cmdShPurge,helpShPurge
+	dc.l nameFiles,cmdFiles,helpFiles
+	dc.l nameMap,cmdMap,helpMap
+	dc.l nameInfo,cmdInfo,helpInfo
+	dc.l nameGetDP,cmdGetDP,helpGetDP
+	dc.l nameGetMem,cmdGetMem,helpGetMem
+	dc.l nameRelease,cmdRelease,helpRelease
+	dc.l nameOomQ,cmdOomQ,helpOomQ
+	dc.l nameRunQ,cmdRunQ,helpRunQ
+	dc.l nameNotifyQ,cmdNotifyQ,helpNotifyQ
+	dc.l nameQueue,cmdQueue,helpQueue
+	dc.l nameFind,cmdFind,helpFind
+	dc.l nameIDS,cmdIDS,helpIDS
+	dc.l nameFill,cmdFill,helpFill
+	dc.l nameCompact,cmdCompact,helpCompact
+	dc.l nameFrag,cmdFrag,helpFrag
+	dc.l nameAddNP,cmdAddNP,helpAddNP
+	dc.l nameDelNP,cmdDelNP,helpDelNP
+	dc.l nameRInfo,cmdRInfo,helpRInfo
+	dc.l nameHSize,cmdHSize,helpHSize
+	dc.l nameNames,cmdNames,helpNames
+	dc.l nameSHRSave,cmdSHRSave,helpSHRSave
+	dc.l nameSHRLoad,cmdSHRLoad,helpSHRLoad
+	dc.l nameHCGS,cmdHCGS,helpHCGS
+	dc.l nameRes,cmdRes,helpRes
+	dc.l nameIDInfo,cmdIDInfo,helpIDInfo
+	dc.l nameStrings,cmdStrings,helpStrings
+	dc.l nameDeskPat,cmdDeskPat,helpDeskPat
+	dc.l nameDeskPic,cmdDeskPic,helpDeskPic
+	dc.l nameReqCode,cmdReqCode,helpReqCode
+	dc.l name80save,cmd80save,help80save
+	dc.l name40save,cmd40save,help40save
+	dc.l nameTSave,cmdTSave,helpTSave
+*	dc.l name%%,cmd%%,help%%
+	dc.l 0
+
+moduleName	dc.b 7,'Goodies'
+
+HelpModule	name
+	pushlong #AboutModule
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+
+AboutModule	dc.b 'Goodies 1.7d2:',cr
+* fill cmd
+	dc.b '  \p8       \os       \00       \01       \e0',cr
+	dc.b '  \e1       \serv     \rtype    \err      \shpurge',cr
+	dc.b '  \files    \map      \info     \oomq     \runq',cr
+	dc.b '  \notifyq  \queue    \getdp    \getmem   \release',cr
+	dc.b '  \find     \ids      \compact  \frag     \hsize',cr
+	dc.b '  \addnp    \delnp    \ri       \names    \hcgs',cr
+	dc.b '  \res      \idinfo   \strings  \deskpat  \deskpic',cr
+	dc.b '  \reqcode  \shrsave  \shrload  \80save   \40save',cr
+	dc.b '  \tsave',cr
+	dc.b 0
+
+**************************************************************
+**************************************************************
+*
+* nn\p8 -- show ProDOS 8 info from data file
+*
+**************************************************************
+nameP8	dc.b 2,'p8'
+
+helpP8	name
+	pushlong #helpP8msg
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+helpP8msg	dc.b 'nn\p8 displays ProDOS command information (0\p8 for all)',cr,0
+
+cmdP8	name
+	jsr GetNum1
+
+	sta lkupData
+	tay
+	beq showAllP8
+	
+	jsr prwordSpout
+	
+	pushlong #lkupParms
+	pea nlLookup
+	jsl NLService
+
+	lda lookupBuff
+	and #$00ff
+	bne gotP8
+
+	pushlong #nothing
+	pea nlWriteCStr
+	jsl NLService
+	bra P8Exit
+
+nothing	dc.b '--unknown ProDOS 8 call number--',0
+
+lkupParms	dc.w nlSecP8
+lkupData	dc.l 0
+	dc.l lookupBuff
+
+gotP8	name
+	pushlong #lookupBuff
+	pea nlShowStr
+	jsl NLService
+P8Exit	jsr crout
+	rtl
+
+ShowAllP8	name
+	stz lkupData
+@show1	inc lkupData
+	pushlong #lkupParms
+	pea nlIndLookup
+	jsl NLService
+
+	lda lookupBuff+4
+	and #$00ff
+	beq @done
+
+	lda lookupBuff
+	bmi @show1		;ignore the comments at start of file
+
+	pushlong lookupBuff
+	pea nlWriteWord
+	jsl NLService
+
+	jsr spout
+
+	pushlong #lookupBuff+4
+	pea nlShowStr
+	jsl NLService
+
+	jsr crout
+
+	bra @show1
+@done	rtl
+
+lookupBuff	ds.b 256
+
+**************************************************************
+**************************************************************
+*
+* nn\RType -- show Resource Type info from data file
+*
+**************************************************************
+nameRType	dc.b 5,'rtype'
+
+helpRType	name
+	pushlong #msgHlpRType
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+msgHlpRType	dc.b 'nnnn\RType displays a Resource Type name (0\rtype for all)',cr,0
+
+cmdRType	name
+	jsr GetNum1		;into YA
+	ldx #nlSecResTypes
+	stz ExtraString
+	brl ShowSectionInfo
+
+**************************************************************
+**************************************************************
+*
+* nn\e0 -- show E0-vector info from data file
+*
+**************************************************************
+nameE0	dc.b 2,'e0'
+
+helpE0	name
+	pushlong #msgHlpE0
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+msgHlpE0	dc.b 'nnnn\e0 displays E0-vector info (0\e0 for all)',cr,0
+
+cmdE0	name
+	jsr GetNum1		;into YA
+	ldy #ExtraE0Str
+	sty ExtraString
+	ldx #nlSecE0Vec
+	brl ShowSectionInfo
+ExtraE0Str	dc.b 'E0',0
+
+**************************************************************
+**************************************************************
+*
+* nn\e1 -- show E1-vector info from data file
+*
+**************************************************************
+nameE1	dc.b 2,'e1'
+
+helpE1	name
+	pushlong #msgHlpE1
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+msgHlpE1	dc.b 'nnnn\e1 displays E1-vector info (0\e1 for all)',cr,0
+
+cmdE1	name
+	jsr GetNum1		;into YA
+	ldy #ExtraE1Str
+	sty ExtraString
+	ldx #nlSecE1Vec
+	brl ShowSectionInfo
+ExtraE1Str	dc.b 'E1',0
+
+**************************************************************
+**************************************************************
+*
+* nn\01 -- show 01-vector info from data file
+*
+**************************************************************
+name01	dc.b 2,'01'
+
+help01	name
+	pushlong #msgHlp01
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+msgHlp01	dc.b 'nnnn\01 displays 01-vector info (0\01 for all)',cr,0
+
+cmd01	name
+	jsr GetNum1		;into YA
+	ldy #Extra01Str
+	sty ExtraString
+	ldx #nlSec01Vec
+	brl ShowSectionInfo
+Extra01Str	dc.b '01',0
+
+**************************************************************
+**************************************************************
+*
+* nn\00 -- show bank-00 info from data file
+*
+**************************************************************
+name00	dc.b 2,'00'
+
+help00	name
+	pushlong #msgHlp00
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+msgHlp00	dc.b 'nnnn\00 displays bank-0 (ROM/softswitch) info (0\00 for all)',cr,0
+
+cmd00	name
+	jsr GetNum1		;into YA
+	ldy #Extra00Str
+	sty ExtraString
+	ldx #nlSecF8andSS
+	brl ShowSectionInfo
+Extra00Str	dc.b '00',0
+
+**************************************************************
+**************************************************************
+*
+* nn\serv -- show nlService info from data file
+*
+**************************************************************
+nameServ	dc.b 4,'serv'
+
+helpServ	name
+	pushlong #msgHlpServ
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+msgHlpServ	dc.b 'nnnn\serv displays Nifty List Service info (0\serv for all)',cr,0
+
+cmdServ	name
+	jsr GetNum1		;into YA
+	stz ExtraString
+	ldx #nlSecNLService
+	brl ShowSectionInfo
+
+**************************************************************
+**************************************************************
+*
+* nn\err -- show OS/toolbox error information from data file
+*
+**************************************************************
+nameErr	dc.b 3,'err'
+
+helpErr	name
+	pushlong #msgHlpErr
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+msgHlpErr	dc.b 'nnnn\err displays an OS or toolbox error name (0\err for all)',cr,0
+
+cmdErr	name
+	jsr GetNum1		;into YA
+	stz ExtraString
+	pha
+	and #$ff00
+	beq @cont
+	xba
+	ldx #nlSecSysTool		;tell them what toolset it's for
+	jsl ShowSectionInfo
+@cont	pla
+	ldx #nlSecErrors
+	brl ShowSectionInfo
+
+**************************************************************
+**************************************************************
+*
+* nnnn\os -- show GS/OS or P16 info from data file
+*
+**************************************************************
+nameOS	dc.b 2,'os'
+
+helpOS	name
+	pushlong #msgHlpOS
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+msgHlpOS	dc.b 'nnnn\os displays GS/OS or ProDOS 16 call info (0\os for all)',cr,0
+
+cmdOS	name
+	jsr GetNum1		;into YA
+	stz ExtraString
+	ldx #nlSecP16
+	brl ShowSectionInfo
+
+**************************************************************
+**************************************************************
+*
+* ShowSectionInfo -- A=value, X=section number
+*
+* A=0: show all entries
+*
+**************************************************************
+ShowSectionInfo	name
+	stx SectionNum
+	sta InfoLkupData
+	tay
+	beq ShowAllInfo
+	
+	pha
+	pha		;input for nlWriteWord
+	jsr PrintExtraStr
+	pea nlWriteWord
+	jsl NLService
+	jsr spout
+	
+	pushlong #InfoLkupParms
+	pea nlLookup
+	jsl NLService
+
+	lda lookupBuff
+	and #$00ff
+	bne @gotInfo
+
+	pushlong #InfoNone
+	pea nlWriteCStr
+	jsl NLService
+	bra @InfoEx
+
+@gotInfo	pushlong #lookupBuff
+	pea nlShowStr
+	jsl NLService
+@InfoEx	jsr crout
+	rtl
+
+InfoNone	dc.b '--no entry found--',0
+
+InfoLkupParms
+SectionNum	dc.w 0
+InfoLkupData	dc.l 0
+	dc.l lookupBuff
+
+ShowAllInfo	name
+	stz InfoLkupData
+@show1	inc InfoLkupData
+	pushlong #InfoLkupParms
+	pea nlIndLookup
+	jsl NLService
+
+	lda lookupBuff+4
+	and #$00ff
+	beq @done
+
+	jsr PrintExtraStr
+	pushlong lookupBuff
+	pea nlWriteWord
+	jsl NLService
+	jsr spout
+	pushlong #lookupBuff+4
+	pea nlShowStr
+	jsl NLService
+	jsr crout
+	bra @show1
+@done	rtl
+
+ExtraString	dc.w 0
+
+PrintExtraStr	name
+	lda ExtraString
+	beq @noExtra
+	pea ExtraString>>16
+	pha
+	pea nlWriteCStr
+	jsl NLService
+@noExtra	rts
+
+**************************************************************
+**************************************************************
+*
+* n\shpurge -- show handles with specified purge level
+*
+**************************************************************
+nameShP	dc.b 7,'shpurge'
+
+helpShPurge	name
+	pushlong #msgHPurge
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+msgHPurge	dc.b 'nn\shpurge shows handles with given purge level',cr,0
+
+cmdShPurge	name
+	jsr GetNum1
+	sta targetLevel
+
+	jsr ShowMemHdr
+
+	pushlong #scanParms
+	pea nlScanHandles
+	jsl NLService
+	rtl
+
+scanParms	dc.w 0	;allocated handles
+	dc.l InfoRec	;used only for setting bank reg
+	dc.l PurgeFilter
+
+targetLevel	dc.w 0
+*
+* PurgeFilter--called by NL once for every handle in the chain
+*
+PurgeFilter	name
+	phd	;called with handle (pascal style)
+	tsc
+	tcd	;handle is at 6
+	ldy #4	;offset to flags
+	lda [6],y
+	and #$0300
+	xba
+	cmp targetLevel
+	bne noPrint
+
+	pei 8
+	pei 6
+	pea nlHandleInfo
+	jsl NLService
+
+noPrint	pld
+	lda 2,s
+	sta 6,s
+	lda 1,s
+	sta 5,s
+	pla
+	pla
+	rtl
+
+**************************************************************
+**************************************************************
+*
+* \files command:  display a table of all the open files
+* (reference numbers, access, pathnames)
+*
+**************************************************************
+nameFiles	dc.b 5,'files'
+
+HelpFiles	name
+	pushlong #msgHlpFiles
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+msgHlpFiles	dc.b '\files displays information on all open files (GS/OS only)',cr,0
+
+cmdFiles	name
+
+	_GetVersionGS VersionParms
+	lda osVersion
+	and #$7fff
+	cmp #$0400
+	bcc @oldHeader
+
+	pushlong #LongFilesHdr
+	pea nlWriteCStr
+	jsl NLService
+	pushlong #LongFilesHdr2
+	pea nlWriteNoVoice
+	jsl NLService
+	bra @didHeader
+
+@oldHeader	pushlong #filesHdr
+	pea nlWriteCStr
+	jsl NLService
+	pushlong #filesHd2
+	pea nlWriteNoVoice
+	jsl NLService
+@didHeader
+
+	stz refnum
+@loop
+	lda #3
+	sta refInfoParms
+	lda osVersion
+	and #$7fff
+	cmp #$0400
+	bcc @oldRefInfo
+	lda #5
+	sta refInfoParms
+@oldRefInfo
+
+	pushlong #refInfoParms
+	pea $2039		;GetRefInfo
+	jsl $E100B0
+	bcs @next
+
+	lda refnum
+	jsr prwordSpout
+	lda access
+	jsr prwordSpout
+
+	ldx #'r'
+	lda access
+	and #1
+	jsr WriteCharNZ
+	ldx #'w'
+	lda access
+	and #2
+	jsr WriteCharNZ
+	jsr spout
+
+	lda osVersion
+	and #$7fff
+	cmp #$0400
+	bcc @skipExtraStuff
+	lda fileLevel
+	jsr prwordSpout
+	lda forkNumber
+	jsr prwordSpout
+@skipExtraStuff
+	
+	pushlong #thePath+2
+	pea nlShowWString
+	jsl NLService
+	jsr crout
+	
+@next	inc refnum
+	lda refnum
+	cmp #$0100	;takes too long to go to $ffff
+	bcs @done
+	phy
+	phy		;result space
+	pha
+	pha		;input (not used)
+	pea nlCheckKey
+	jsl NLService
+	pla
+	pla
+	bne @done
+	brl @loop
+@done	rtl
+*
+* WriteCharNZ--if Z flag clear, write char in X, else write blank
+*
+WriteCharNZ	bne @useX
+	ldx #' '
+@useX	txa
+	brl cout
+
+refInfoParms	dc.w 3
+refnum	dc.w 0
+access	dc.w 0
+path	dc.l thePath
+forkNumber	dc.w 0
+fileLevel	dc.w 0
+
+thePath	dc.w 128,0
+	ds.b 128
+
+filesHdr	dc.b 'ref# access  pathname',cr,0
+filesHd2	dc.b '---- ------- --------',cr,0
+*	      0001 0003 rw :H1:System:...
+
+LongFilesHdr	dc.b 'ref# access  levl fork pathname',cr,0
+LongFilesHdr2	dc.b '---- ------- ---- ---- --------',cr,0
+
+VersionParms	dc.w 1
+osVersion	dc.w 0
+
+
+**************************************************************
+**************************************************************
+*
+* \map -- dump resource maps
+*
+**************************************************************
+nameMap	dc.b 3,'map'
+
+helpMap	name
+	pushlong #msgHlpMap
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+
+msgHlpMap dc.b 'nnnn\map dumps resource maps for the specified ID',cr,0
+
+cmdMap	name
+	sep #$30
+	lda >$E100CB
+	inc a
+	sta >$E100CB
+*** Ouch, if they hit ESC to abort, I never decrement E100CB??
+	rep #$30
+	jsl cmdMap2
+	sep #$30
+	lda >$E100CB
+	dec a
+	sta >$E100CB
+	rep #$30
+	rtl
+
+cmdMap2	name
+	jsr GetNum1
+	sta mapID
+	
+	pha
+	_GetCurResourceApp
+	lda mapID
+	pha
+	_SetCurResourceApp
+	pha
+	pha
+	pea 0		;file id
+	_GetMapHandle		;keep carry flag for below
+	pla
+	sta addr
+	pla
+	sta addr+2
+	bcs @noMap
+@next	jsr DumpMap
+	jsr AskNext
+	php
+	jsr crout
+	plp
+	bcc @next
+@noMap	_SetCurResourceApp
+	rtl
+*
+* AskNext--return clc, addr=map handle to dump more maps
+*
+AskNext	name
+	ldy #0
+	jsr GetLongY
+	beq @no
+	sta addr+2
+	stx addr
+	pushlong #msgMoreMaps
+	pea nlWriteCStr
+	jsl NLService
+@key	pha
+	pha
+	pha
+	pha
+	pea nlGetChar	;nlGetChar(ignored/4):key/4
+	jsl NLService
+	pla
+	ply
+	cmp #$1b		;hit ESC?
+	beq @no
+	cmp #$0d		;return?
+	bne @key
+	clc
+	rts	
+@no	sec
+	rts
+msgMoreMaps dc.b cr,'[ RETURN for next map, ESC to stop ] ',0
+*
+* dump a resource map, handle=Addr
+*
+DumpMap	name
+	lda addr+2
+	jsr prword
+	lda addr
+	jsr prword
+	lda #':'
+	jsr cout
+	jsr crout
+* deref handle
+	pushlong addr
+	phd
+	tsc
+	tcd
+	lda [3]
+	tax
+	ldy #2
+	lda [3],y
+	sta 5
+	stx 3
+	pld
+	pla
+	sta addr
+	pla
+	sta addr+2
+
+	lda #MapTable>>16
+	ldy #MapTable
+	jsr DumpByTbl
+	ldy #$20
+	jsr DumpFreeList
+	ldy #$0e		;mapToIndex
+	jsr GetWordY
+	tay
+	jsr DumpResList
+	rts
+
+mapID	dc.w 0
+
+MapTable	dc.w map01,dumpLng,$00
+	dc.w map02,dumpWrd,$04
+	dc.w map03,dumpLng,$06
+	dc.w map04,dumpLng,$0A
+	dc.w map05,dumpWrd,$0E
+	dc.w map06,dumpWrd,$10
+	dc.w map07,dumpWrd,$12
+	dc.w map08,dumpLng,$14
+	dc.w map09,dumpLng,$18
+	dc.w map10,dumpWrd,$1C
+	dc.w map11,dumpWrd,$1E
+	dc.w 0
+
+map01	dc.b    '        mapNext: ',0
+map02	dc.b cr,'        mapFlag: ',0
+map03	dc.b cr,'      mapOffset: ',0
+map04	dc.b cr,'        mapSize: ',0
+map05	dc.b cr,'     mapToIndex: ',0
+map06	dc.b cr,'     mapFileNum: ',0
+map07	dc.b cr,'          mapID: ',0
+map08	dc.b cr,'   mapIndexSize: ',0
+map09	dc.b cr,'   mapIndexUsed: ',0
+map10	dc.b cr,'mapFreeListSize: ',0
+map11	dc.b cr,'mapFreeListUsed: ',0
+
+DumpFreeList	name
+	pushlong addr
+	tya
+	jsr AddAddr
+	lda addr+2
+	ldy addr
+	sta theFreeList+2
+	sty theFreeList
+@cont	ldy #0
+	jsr GetLongY	; --> AX, Z=nil
+	beq @dun
+	lda #rFreeTbl>>16
+	ldy #rFreeTbl
+	jsr DumpByTbl
+	lda #8
+	jsr AddAddr
+	bra @cont
+@dun	pla
+	sta addr
+	pla
+	sta addr+2
+	rts
+
+rFreeTbl	dc.w free01,dumpLng,$00
+	dc.w free02,dumpLng,$04,0
+free01	dc.b cr,'FREE  blkOffset: ',0
+free02	dc.b    '  blkSize: ',0
+*
+* get longword from [addr],y into AX, return Z=(AX=nil)
+*
+GetLongY	name
+	jsr GetWordY
+	tax
+	iny
+	iny
+	jsr GetWordY
+	dey
+	dey
+	cmp #0
+	bne @dun
+	cpx #0
+@dun	rts
+*
+* add A to addr
+*
+AddAddr	name
+	clc
+	adc addr
+	sta addr
+	bcc @dun
+	inc addr+2
+@dun	rts
+*
+* dump resource-reference records, starting at [addr],y
+*
+DumpResList	name
+	pushlong addr
+
+	phy
+	pushlong #ResTbl01
+	pea nlWriteCStr
+	jsl NLService
+	pushlong #ResTblV
+	pea nlWriteNoVoice
+	jsl NLService
+	pla
+
+	jsr AddAddr
+@cont	ldy #0
+	jsr GetWordY
+	tax
+	beq @dun
+	lda #rRefTbl>>16
+	ldy #rRefTbl
+	jsr DumpByTbl
+	jsr ValidateRRef
+	lda #$14
+	jsr AddAddr
+	bra @cont
+@dun	pla
+	sta addr
+	pla
+	sta addr+2
+	rts
+
+rRefTbl	dc.w nullStr,dumpWrd,$00
+	dc.w blnkStr,dumpLng,$02
+	dc.w blnkStr,dumpLng,$06
+	dc.w blnkStr,dumpWrd,$0A
+	dc.w blnkStr,dumpLng,$0C
+	dc.w blnkStr,dumpLng,$10
+	dc.w 0
+
+blnkStr	dc.b ' '
+nullStr	dc.b 0	
+
+ResTbl01	dc.b cr,'type id       offset   attr size     handle',cr,0
+ResTblV	dc.b    '---- -------- -------- ---- -------- --------',cr,0
+
+theFreeList	dc.l 0
+*
+* ValidateRRef -- print error stuff if resource reference record
+*   at [addr] overlaps a free area.
+*
+ValidateRRef	name
+	phd
+	pushlong theFreeList
+	pushlong addr
+	tsc
+	tcd
+	jsr Validate2
+	pla
+	pla		;pulled res ref rec ptr
+	pla
+	pla		;pulled theFreeList
+	pld
+	rts
+
+rrr	equ 1		;resource reference record ptr
+free	equ 5
+*
+* Validate2 -- check rrr location against all free-list entries
+*
+Validate2	name
+	ldy #2
+	lda [free],y
+	ora [free]
+	beq @done
+	jsr ValidateOne
+	clc
+	lda free
+	adc #8
+	sta free
+	bcc Validate2
+	inc free+2
+	bra Validate2
+@done	rts
+*
+* ValidateOne -- check rrr location against *one* free-list entry
+*
+* offset = [rrr],6     length = [rrr],$C
+* offset = [free]      length = [free],4
+*
+* If free.offset >= rrrEnd, we're okay.
+* If  rrr.offset >= freeEnd, we're okay.
+*
+ValidateOne	name
+	clc
+	ldy #6
+	lda [rrr],y
+	ldy #$c
+	adc [rrr],y
+	sta rrrEnd
+	ldy #6+2
+	lda [rrr],y
+	ldy #$c+2
+	adc [rrr],y
+	sta rrrEnd+2
+	
+	clc
+	lda [free]
+	ldy #4
+	adc [free],y
+	sta freeEnd
+	ldy #0+2
+	lda [free],y
+	ldy #4+2
+	adc [free],y
+	sta freeEnd+2
+	
+	ldy #2
+	lda [free],y
+	cmp rrrEnd+2
+	bne @comp1
+	lda [free]
+	cmp rrrEnd
+@comp1	bcs @ok
+
+	ldy #6+2
+	lda [rrr],y
+	cmp freeEnd+2
+	bne @comp2
+	ldy #6
+	lda [rrr],y
+	cmp freeEnd
+@comp2	bcs @ok
+
+	pushlong #overlapMsg
+	pea nlWriteCStr
+	jsl NLService
+
+@ok	rts
+
+freeEnd	dc.l 0
+rrrEnd	dc.l 0
+
+overlapMsg	dc.b '      *** WARNING--OVERLAPS FREE AREA *** ',cr,0
+
+**************************************************************
+**************************************************************
+*
+* \info command:  display misc Nifty List info
+*
+**************************************************************
+nameInfo	dc.b 4,'info'
+
+HelpInfo	name
+	pushlong #msgHlpInfo
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+msgHlpInfo	dc.b '\info displays miscellaneous information about Nifty List',cr,0
+
+cmdInfo	name
+	pushlong #infoBuff
+	pea nlGetInfo
+	jsl NLService
+
+	pushlong #msgNLVer
+	pea nlWriteCStr
+	jsl NLService
+	lda infoVers
+	jsr prword
+	jsr crout
+
+	pushlong #msgNLDir
+	pea nlWriteCStr
+	jsl NLService
+	pha
+	pha
+	pha	;ignored
+	pha	;ignored
+	pea nlGetDirectory
+	jsl NLService
+	pea nlShowWString
+	jsl NLService
+	jsr crout
+	rtl
+
+msgNLVer	dc.b 'Nifty List version = $',0
+msgNLDir	dc.b '         directory = ',0
+
+infoBuff
+infoSize	dc.w 0
+infoVers	dc.w 0
+	ds.b 252
+
+**************************************************************
+**************************************************************
+*
+* \getdp command:  allocate direct-page space
+*
+**************************************************************
+nameGetDP	dc.b 5,'getdp'
+
+helpGetDP	name
+	pushlong #msgHlpGetDP
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+msgHlpGetDP	dc.b 'nn\getdp allocates nn pages of bank-0 memory',cr,0
+
+cmdGetDP	name
+	jsr GetNum1
+	xba
+	pha
+	and #$00ff
+	tay
+	pla
+	and #$ff00
+	ldx #$C015
+	brl getIt
+
+**************************************************************
+**************************************************************
+*
+* \getmem command:  allocate memory
+*
+**************************************************************
+nameGetMem	dc.b 6,'getmem'
+
+helpGetMem	name
+	pushlong #msgHlpGetMem
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+msgHlpGetMem	dc.b 's\getmem allocates s bytes of memory (locked and fixed)',cr,0
+
+RangeBuffer
+rStart	dc.l 0
+rEnd	dc.l 0
+rawStart	dc.l 0
+rawEnd	dc.l 0
+
+cmdGetMem	name
+	pha
+	pha
+	pushlong #RangeBuffer
+	pea nlGetRange
+	jsl NLService
+	pla
+	pla
+	ldy rawStart+2
+	lda rawStart
+	ldx #$C000	;attributes
+
+getIt	pea 0
+	pea 0
+	phy
+	pha
+	jsr GetTempID
+	pha
+	phx
+	pea 0
+	pea 0
+	_NewHandle
+	ply
+	plx
+	bcs nhError
+	phx
+	phy
+	jsr ShowMemHdr
+	pea nlHandleInfo
+	jsl NLService
+	rtl
+
+nhError
+ErrorNumberA	pha
+	pushlong #msgToolError
+	pea nlWriteCStr
+	jsl NLService
+	pla
+	stz ExtraString
+	ldx #nlSecErrors
+	jsl ShowSectionInfo
+	rtl
+
+msgToolError	dc.b 'Error = $',0
+
+ShowMemHdr	name
+	pushlong #memHdr
+	pea nlWriteCStr
+	jsl NLService
+	pushlong #memHdr2
+	pea nlWriteNoVoice
+	jsl NLService
+	rts
+
+memHdr	DC.B 'handle addr   size   flgs ownr path',cr,0
+memHdr2	DC.B '------ ------ ------ ---- ---- ----',cr,0
+
+**************************************************************
+**************************************************************
+*
+* \release command:  release temporary memory from getdp/getmem
+*
+**************************************************************
+nameRelease	dc.b 7,'release'
+
+helpRelease	name
+	pushlong #msgHlpRelease
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+msgHlpRelease	dc.b '\release disposes of handles from \getdp and \getmem',cr,0
+
+cmdRelease	name
+	jsr GetTempID
+	pha
+	_DisposeAll
+	rtl
+
+GetTempID	name
+	phx
+	pha
+	_MMStartUp
+	pla
+	and #$f0ff
+	ora #$0500
+	plx
+	rts
+
+**************************************************************
+**************************************************************
+*
+* \queue displays entries in a standard queue
+*
+**************************************************************
+nameQueue	dc.b 5,'queue'
+
+helpQueue	name
+	pushlong #msgHlpQueue
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+msgHlpQueue	dc.b 'addr\queue displays entries in a standard queue with the',cr
+	dc.b 'specified queue header',cr,0
+
+qHdr	DC.B 'header handle addr   size   flgs ownr path',cr,0
+qHdr2	DC.B '------ ------ ------ ------ ---- ---- ----',cr,0
+
+cmdQueue	name
+	jsr GetNum1
+	pha
+	tya
+	ply
+
+qdump	name
+	phd		;queue header = ay
+	pha
+	phy
+	tsc
+	tcd		;queue ptr is at 1
+
+	pushlong #qHdr
+	pea nlWriteCStr
+	jsl NLService
+	pushlong #qHdr2
+	pea nlWriteNoVoice
+	jsl NLService
+
+	lda 3
+	ora 1
+	beq @done
+	
+	sep #$20
+	lda >$e1c068
+	pha
+	lda >$e1c08b
+	lda >$e1c08b
+	rep #$20
+	
+@next	ldy #2
+	lda [1],y
+	pha
+	lda [1]
+	sta 1
+	pla
+	sta 3
+	ora 1
+	beq @finish
+
+	lda 3
+	jsr prbyte
+	lda 1
+	jsr prwordSpout
+	pha
+	pha
+	pei 3
+	pei 1
+	_FindHandle
+	pea nlHandleInfo
+	jsl NLService
+	bra @next
+
+@finish	sep #$20
+	pla
+	sta >$e1c068
+	rep #$20
+
+@done	plx
+	plx
+	pld
+	rtl
+
+**************************************************************
+**************************************************************
+*
+* \oomq command:  display entries in the out-of-memory queue
+*
+**************************************************************
+nameOomQ	dc.b 4,'oomq'
+
+helpOomQ	name
+	pushlong #msgHlpOomQ
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+msgHlpOomQ	dc.b '\oomq displays entries in the out-of-memory queue',cr,0
+
+cmdOomQ	name
+	php
+	sei
+	jsr BeginQueueSniff
+	pushlong #DummyOOM
+	ldx #$0C02		;AddToOOMQueue
+	jsl $e10000
+	pushlong #DummyOOM
+	ldx #$0D02		;RemoveFromOOMQueue
+	jsl $e10000
+	jsr EndQueueSniff		;returns queue header in AY
+	plp
+	jsr PrintQHead
+	jsl qdump
+	rtl
+
+PrintQHead	name
+	pha
+	phy
+	pushlong #qhdMsg
+	pea nlWriteCStr
+	jsl NLService
+	lda 3,s
+	jsr prbyte
+	lda 1,s
+	jsr prword
+	jsr crout
+	jsr crout
+	ply
+	pla
+	rts
+qhdMsg	dc.b 'Queue header = $',0
+
+DummyOOM	dc.l 0	;queue link
+	dc.w 0	;OOM routine version
+	dc.w $a55a	;signature
+	lda #0
+	sta 12,s
+	sta 10,s
+	sep #$20
+	pla
+	ply
+	plx
+	plx
+	plx
+	phy
+	pha
+	rep #$20
+	rtl
+
+BeginQueueSniff	name
+	stz theHeader
+	stz theHeader+2
+	lda >$e10000
+	sta RealTool
+	lda >$e10002
+	sta RealTool+2
+	lda ToTrap
+	sta >$e10000
+	lda ToTrap+2
+	sta >$e10002
+	rts
+ToTrap	jmp >Add2QTrp
+
+EndQueueSniff	name
+	lda RealTool
+	sta >$e10000
+	lda RealTool+2
+	sta >$e10002
+	lda theHeader+2
+	ldy theHeader
+	rts
+
+Add2QTrp	name
+	cpx #$2e03	;AddToQueue
+	bne RealTool
+	lda 4,s
+	sta >theHeader
+	lda 6,s
+	sta >theHeader+2
+RealTool	jmp >$777777
+
+theHeader	dc.l 0
+
+**************************************************************
+**************************************************************
+*
+* \runq command:  display entries in the run queue
+*
+**************************************************************
+nameRunQ	dc.b 4,'runq'
+
+helpRunQ	name
+	pushlong #msgHlpRunQ
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+msgHlpRunQ	dc.b '\runq displays entries in the run queue',cr,0
+
+cmdRunQ	name
+	php
+	sei
+	jsr BeginQueueSniff
+
+	pushlong #DummyRunQ
+	ldx #$1f05		;AddToRunQ
+	jsl $e10000
+	pushlong #DummyRunQ
+	ldx #$2005		;RemoveFromRunQ
+	jsl $e10000
+
+	jsr EndQueueSniff		;returns queue header in AY
+	plp
+	jsr PrintQHead
+	jsl qdump
+
+	rtl
+
+DummyRunQ	dc.l 0	;link to next entry
+	dc.w 0	;period
+	dc.w $a55a	;signature
+	dc.l 0	;used by Desk Manager
+	rtl
+
+**************************************************************
+**************************************************************
+*
+* \notifyq command:  display entries in the GS/OS Notify queue
+*
+**************************************************************
+nameNotifyQ	dc.b 7,'notifyq'
+
+helpNotifyQ	name
+	pushlong #msgHlpNotifyQ
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+msgHlpNotifyQ	dc.b '\notifyq displays entries in the GS/OS Notify queue',cr,0
+
+cmdNotifyQ	name
+	php
+	sei
+	jsr BeginQueueSniff
+
+	pushlong #NotifyParms
+	pea $2034		;_AddNotifyProc
+	jsl $e100b0
+	pushlong #NotifyParms
+	pea $2035		;_DelNotifyProc
+	jsl $e100b0
+
+	jsr EndQueueSniff		;returns queue header in AY
+	plp
+	jsr PrintQHead
+	jsl qdump
+	rtl
+
+NotifyParms	dc.w 1
+	dc.l DummyNotifyQ
+
+DummyNotifyQ	dc.l 0	;link to next entry
+	dc.w 0	;reserved
+	dc.w $a55a	;signature
+	dc.l 2	;event flags (switch only - gotta have one set)
+	dc.l 0	;event code
+	rtl
+
+
+**************************************************************
+**************************************************************
+*
+* range\find expr searches memory for the given sequence of bytes
+*
+**************************************************************
+nameFind	dc.b 4,'find'
+
+helpFind	name
+	pushlong #msgHlpFind
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+
+msgHlpFind	dc.b '\find searches memory for the given sequence of bytes.',cr
+	dc.b cr
+	dc.b 'Syntax:  (see =` for expression syntax)',cr
+	dc.b '  start.end\find expr',cr
+	dc.b '  handle\find expr',cr
+	dc.b '  memid\find expr (does wild ID matching like I command)',cr
+	dc.b cr
+	dc.b 'Examples:',cr
+	dc.b '  2/0.3ffff\find [A2 #NewHandle 22]',cr
+	dc.b '  e01234\find "hello"',cr
+	dc.b '  1003\find e100a8',cr
+	dc.b '  0\find "kersplat"',cr
+	dc.b cr
+	dc.b 'Note: \find can''t currently search language-card RAM.',cr
+	dc.b 'Note: For now, BB is a wildcard byte in search patterns.'
+	dc.b 0
+
+Wildcard	dc.w $bb		;need a command to change this
+
+cmdFind	name
+	stz horzCount
+	jsr EvalExpr		;into ExprBuff, XA=len
+	tax
+	beq @zeroExpr
+
+	pha
+	pha
+	pushlong #RangeBuffer
+	pea nlGetRange
+	jsl NLService
+	pla
+	plx
+
+	cmp #2		;2 parameters?
+	beq @rng
+	lda rawStart+2
+	bne @hand
+
+	jsr SearchByID		;1003\find ...
+	jsr crout
+	rtl
+
+@hand	pushlong rawStart		;e01700\find ...
+	_CheckHandle
+	bcs @badHand
+	
+	pushlong rawStart
+	jsl SrchByHandle
+	jsr crout
+	rtl
+
+@rng	jsr SrchRng		;1/2000.3000\find ...
+	jsr crout
+	rtl
+
+@badHand	pushlong #badHandMsg
+	bra @msg
+@zeroExpr	pushlong #zerExprMsg
+@msg	pea nlWriteCStr
+	jsl NLService
+	rtl
+zerExprMsg	dc.b cr,'*** can''t search for zero-length expression',cr,0
+badHandMsg	dc.b cr,'*** invalid handle',cr,0
+
+ExprBuff	dc.w 128
+ExprLen	dc.w 0
+	ds.b 128
+
+*
+* SearchByID--search all the handles with the specified ID
+*
+SearchByID	name
+	lda rStart
+	sta targetID
+	pushlong #ByIDPrms
+	pea nlScanHandles
+	jsl NLService
+	rts
+
+ByIdPrms	dc.w 0	;allocated handles
+	dc.l InfoRec	;used only for setting bank reg
+	dc.l SearchFilter
+
+targetID	dc.w 0
+
+*
+* SrchByHandle
+*
+SrchByHandle	name
+	phd
+	tsc
+	tcd
+	ldy #6
+	lda [6],y
+	sta targetID
+	pld
+; v v v v v  fall into SearchFilter
+*
+* SearchFilter--called by NL once for every handle in the chain
+*
+SearchFilter	name	;called with handle (pascal style)
+	phd
+	tsc
+	tcd	;handle is at 6
+	ldy #6	;offset to handle ID
+	lda [6],y
+	beq @exit
+	jsr CompareToTarg
+	bcs @exit
+
+	lda [6]
+	sta rStart
+	clc
+	ldy #8
+	adc [6],y
+	sta rEnd
+	ldy #2
+	lda [6],y
+	sta rStart+2
+	ldy #10
+	adc [6],y
+	sta rEnd+2
+	jsr SrchRng	
+
+@exit	pld
+	lda 2,s
+	sta 6,s
+	lda 1,s
+	sta 5,s
+	pla
+	pla
+	rtl
+
+CompareToTarg	name
+	sta ThisID
+	lda #$f000
+	jsr CompSect
+	bcs DidCmpID
+	lda #$0f00
+	jsr CompSect
+	bcs DidCmpID
+	lda #$00ff
+	jsr CompSect
+DidCmpID	rts
+
+CompSect	sta cmpMask
+	and TargetID
+	beq csOK
+	sta tempID
+	lda ThisID
+	and cmpMask
+	cmp tempID
+	beq csOK
+	sec
+	rts
+csOK	clc
+	rts
+
+cmpMask	dc.w 0
+TempID	dc.w 0
+ThisID	dc.w 0
+
+*
+* SearchRng--search in rStart..rEnd for Expr
+*
+SrchRng	name
+	phd
+	pushlong rEnd
+	pushlong rStart
+	tsc
+	tcd		;1=start, 5=end
+	sec
+	lda 1
+	sbc 5
+	sta 5
+	lda 3
+	sbc 7
+	sta 7		;5 = start-end
+	clc
+	lda 5
+	dec ExprLen	;16-Jul-90
+	adc ExprLen
+	inc ExprLen	;16-Jul-90
+	sta 5
+	bcc @ok7
+	inc 7		;5 = start-end+exprLen
+@ok7	lda 7
+	bpl @x		;bad range (start>end, etc)
+@srch	jsr SearchCore
+	bcs @x
+	jsr ShowMtch
+	inc 1
+	bne @a
+	inc 3
+@a	inc 5
+	bne @srch
+	inc 7
+	bne @srch
+@x	pla
+	pla
+	pla
+	pla
+	pld
+	rts
+
+horzCount	dc.w 0
+
+ShowMtch	name
+	pha
+	pei 3
+	pea nlWriteByte
+	jsl NLService
+	lda #'/'
+	jsr cout
+	lda 1
+	jsr prword
+	inc horzCount
+	lda horzCount
+	cmp #10
+	bne @x
+	stz horzCount
+	jmp crout
+@x	jmp spout
+
+*
+* SearchCore--call with [1] = start, [5] = -length remaining
+*
+* Searches at [1] for expression in ExprBuff
+*
+* Returns SEC=finished, CLC=found at [1]
+*
+* ExprLen must not be 0
+*
+SearchCore	name
+	lda 7
+	ora 5
+	beq @fail		;no bytes to search
+@core	sep #$30
+	longa off
+	longi off
+	ldx ExprLen		;must not be 0!
+	ldy #0
+@srch	lda ExprBuff+4,y
+	cmp Wildcard		;2-Sep-90 DAL
+	beq @wc		;2-Sep-90 DAL
+	cmp [1],y
+	bne @advance
+@wc	iny
+	dex
+	bne @srch
+	rep #$30
+	clc		;return success
+	rts
+@advance	rep #$30
+	longa on
+	longi on
+	inc 1
+	bne @c
+	inc 3
+@c	inc 5
+	bne @core
+	inc 7
+	bne @core
+@fail	sec		;return failure
+	rts
+
+
+**************************************************************
+**************************************************************
+*
+* nnnn\ids displays pathname information for user IDs
+*
+**************************************************************
+nameIDS	dc.b 3,'ids'
+
+helpIDS	name
+	pushlong #msgHlpIDS
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+
+msgHlpIDS	dc.b '\ids displays pathnames for active memory manager IDs.',cr
+	dc.b '(To save time, \ids stops looking in each $x000 range when it',cr
+	dc.b 'finds 16 IDs in a row that aren''t allocated according to',cr
+	dc.b 'StatusID.)',cr
+	dc.b 0
+
+msgIDHeader	dc.b 'ID    pathname',cr
+	dc.b '----  --------',cr,0
+
+cmdIDS	name
+	pushlong #msgIDHeader
+	pea nlWriteCStr
+	jsl NLService
+	stz MainID
+	stz IDType
+	stz failCnt
+@tryNext	inc MainID
+	lda MainID
+	cmp #$100
+	bcs @nextType
+	jsr BuildID
+	cmp #$4000
+	bcc @getstat
+	cmp #$4040
+	bcc @simulateOK	;do $40xx even though StatusID doesn't like them
+@getstat	pha
+	_StatusID
+	bcs @fail
+@simulateOK
+	jsr BuildID
+	jsr OneMasterID
+	bra @tryNext
+@fail	inc failCnt
+	lda failCnt
+	cmp #16
+	bcc @tryNext
+@nextType	stz MainID
+	stz failCnt
+	inc IDType
+	lda IDType
+	cmp #$10
+	bcc @trynext
+	rtl
+
+BuildID	lda IDType
+	xba
+	asl a
+	asl a
+	asl a
+	asl a
+	ora MainID
+	rts
+	
+IDType	dc.w 0
+MainID	dc.w 0
+AuxID	dc.w 0
+failCnt	dc.w 0
+
+OneMasterID	name
+	sta @theID
+
+;	jsr prword
+;	jsr spout
+;	jsr spout
+;	lda @theID
+;	jsr GetPath
+;	jsr ShowPathXY
+
+	stz AuxID
+	dec AuxID
+@auxloop	inc AuxID
+	lda AuxID
+;	cmp #$10
+	cmp #1		;#$10 to try aux IDs
+	bcs @done
+	xba
+	ora @theID
+	sta @id2
+	jsr GetPath
+	txa
+	beq @auxloop
+	phx
+	phy
+	lda @id2
+	jsr prwordSpout
+	jsr spout
+	ply
+	plx
+	jsr ShowPathXY
+	bra @auxloop
+@done	rts
+@theID	dc.w 0
+@id2	dc.w 0
+
+ShowPathXY	name
+	txa
+	beq @no
+	phx
+	phy
+	pea nlShowWString
+	jsl NLService
+@no	jsr crout
+	rts
+*
+* GetPath(A=mem id) --> Carry=error, XY = word-string pointer
+*
+GetPath	name
+	pha
+	pha		;space for result
+	pha		;mem ID
+	pea 1		;file number
+	ldx #$2211
+	jsl $e10000
+	ply
+	plx
+	bcc @good
+	ldx #0
+	txy
+	cmp #$10		;dispatcher error?
+	bcs @x
+	pla
+	pla
+@x	rts
+
+@good	phd
+	phx
+	phy
+	tsc
+	tcd
+	lda [1]
+	ply
+	plx
+	pld
+	ora #0
+	bne @good2
+	ldx #0
+	txy
+@good2	rts
+
+**************************************************************
+**************************************************************
+*
+* range\fill expr fills memory with the given sequence of bytes
+*
+**************************************************************
+nameFill	dc.b 4,'fill'
+
+helpFill	name
+	pushlong #msgHlpFill
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+msgHlpFill
+ dc.b '\fill (NOT IMPLEMENTED) fills memory with the given sequence of bytes.',cr
+ dc.b 0
+
+cmdFill	name
+
+;@@@
+
+	jsr EvalExpr
+;@@@
+
+	rtl
+
+	
+**************************************************************
+**************************************************************
+*
+* \compact compacts memory and reports on fragmentation
+*
+**************************************************************
+nameCompact	dc.b 7,'compact'
+
+helpCompact	name
+	pushlong #msgHlpCompact
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+
+msgHlpCompact	dc.b '\compact does a CompactMem call and reports on fragmentation',cr
+	dc.b 0
+
+cmdCompact	name
+	pushlong #rfRprt
+	pea nlWriteCStr
+	jsl NLService
+
+	jsr ReportFrag
+	_CompactMem
+	jsr ReportFrag
+	rtl
+
+**************************************************************
+**************************************************************
+*
+* \frag compacts memory and reports on fragmentation
+*
+**************************************************************
+nameFrag	dc.b 4,'frag'
+
+helpFrag	name
+	pushlong #msgHlpFrag
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+
+msgHlpFrag	dc.b '\frag reports on memory fragmentation',cr
+	dc.b 0
+
+cmdFrag	name
+	pushlong #rfRprt
+	pea nlWriteCStr
+	jsl NLService
+	jsr ReportFrag
+	rtl
+
+ReportFrag	name
+	stz rfNext
+	stz rfNext+2
+	stz rfNumFree
+	stz rfTotalFree
+	stz rfTotalFree+2
+	ldx #20-2
+	lda #0
+@zerbuck	sta rfBuckets,x
+	dex
+	dex
+	bpl @zerbuck
+
+	pushlong #scanFr
+	pea nlScanHandles
+	jsl NLService
+
+	ldx #0
+@a	phx
+	lda rfBuckets,x
+	jsr prwordSpout
+	plx
+	inx
+	inx
+	cpx #20
+	bcc @a
+	lda #'|'
+	jsr cout
+	jsr spout
+	lda rfNumFree
+	jsr prwordSpout
+	jsr ShowAvgSize
+	jsr spout
+	pha
+	pha
+	_MaxBlock
+	lda 3,s
+	jsr prbyte
+	pla
+	jsr prword
+	pla
+	jmp crout
+
+ShowAvgSize	name
+	pha
+	pha
+	pha
+	pha		;space for result
+	lda rfTotalFree+2
+	pha
+	lda rfTotalFree
+	pha
+	pea 0
+	lda rfNumFree
+	pha
+	_LongDivide
+	lda 3,s
+	jsr prbyte
+	pla
+	jsr prword
+	pla
+	pla
+	pla
+	rts
+
+rfBuckets	dc.w 0,0,0,0,0,0,0,0,0,0
+rfNumFree	dc.w 0
+rfTotalFree	dc.l 0
+rfNext	dc.l 0
+
+rfRprt
+ dc.b cr
+ dc.b '<256 1/4K 1/2K  1K   2K   4K   8K  16K  32K  64K+ | num  avg sz maxblk',cr
+ dc.b '---- ---- ---- ---- ---- ---- ---- ---- ---- ---- | ---- ------ ------',cr,0
+
+scanFr	dc.w 0	;allocated handles
+	dc.l InfoRec	;used only for setting bank reg
+	dc.l FreeFilter
+
+*
+* FreeFilter--called by NL once for every handle in the chain
+*
+hLength	equ 8
+FreeFilter	name
+	phd		;called with handle (pascal style)
+	tsc
+	tcd		;handle is at 6
+	lda [6]
+	cmp rfNext
+	bne @found
+	ldy #2
+	lda [6],y
+	cmp rfNext+2
+	beq @boring
+@found	jsr @gotOne
+@boring	clc
+	lda [6]
+	ldy #hLength
+	adc [6],y
+	sta rfNext
+	ldy #2
+	lda [6],y
+	ldy #hLength+2
+	adc [6],y
+	sta rfNext+2
+	pld
+	lda 2,s
+	sta 6,s
+	lda 1,s
+	sta 5,s
+	pla
+	pla
+	rtl
+* gotOne--the handle at 6 starts -past- rfNext
+@gotOne	inc rfNumFree
+	bne @noMax
+	dec rfNumFree
+@noMax	sec
+	lda [6]
+	sbc rfNext
+	sta @size
+	ldy #2
+	lda [6],y
+	sbc rfNext+2
+	sta @size+2
+* add to rfTotalFree
+	clc
+	lda rfTotalFree
+	adc @size
+	sta rfTotalFree
+	lda rfTotalFree+2
+	adc @size+2
+	sta rfTotalFree+2
+* put it in a bucket
+	ldx #9*2
+	lda @size+2
+	bne @incBX
+	lda @size
+@srchB	dex
+	dex
+	beq @incBX
+	asl a
+	bcc @srchB
+@incBX	inc rfBuckets,x
+	bne @noMx
+	dec rfBuckets,x
+@noMx	rts
+
+@size	dc.l 0
+
+**************************************************************
+**************************************************************
+*
+* \addnp -- add a test notify proc
+*
+**************************************************************
+nameAddNP	dc.b 5,'addnp'
+
+helpAddNP	name
+	pushlong #msgHlpAddNP
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+
+msgHlpAddNP	dc.b '\addnp adds a test notify proc',cr
+	dc.b 0
+
+cmdAddNP	name
+	pushlong #TestNotifyParms
+	pea $2034		;_AddNotifyProc
+	jsl $e100b0
+	bcc @ok
+	jsr ReportError
+@ok	rtl
+
+**************************************************************
+**************************************************************
+*
+* \delnp -- delete the test notify proc
+*
+**************************************************************
+nameDelNP	dc.b 5,'delnp'
+
+helpDelNP	name
+	pushlong #msgHlpDelNP
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+
+msgHlpDelNP	dc.b '\delnp deletes the test notify proc',cr
+	dc.b 0
+
+cmdDelNP	name
+	pushlong #TestNotifyParms
+	pea $2035		;_DelNotifyProc
+	jsl $e100b0
+	bcc @ok
+	jsr ReportError
+@ok	rtl
+
+ReportError	jsr prword
+	rts
+
+TestNotifyParms	dc.w 1
+	dc.l TestNProc
+
+TestNProc	dc.l 0	;link to next entry
+	dc.w 0	;reserved
+	dc.w $a55a	;signature
+	dc.l $0000007e	;event flags
+@event	dc.l 0	;event code
+	phb
+	phk
+	plb
+	sta @npA
+	stx @npX
+	sty @npY
+	jsr PrepareText
+	pushlong #myNotifyHeader
+	_WriteCString	
+	lda @event+2
+	jsr myPrWord
+	lda @event
+	jsr myPrWord
+	jsr mySpout
+	lda @npA
+	jsr myPrWord
+	jsr mySpout
+	lda @npX
+	jsr myPrWord
+	jsr mySpout
+	lda @npY
+	jsr myPrWord
+	jsr myCrout
+	pha
+	pea 0
+	_ReadChar
+	pla
+	jsr RestoreText	
+	plb
+	rtl
+@npA	dc.w 0
+@npX	dc.w 0
+@npY	dc.w 0
+
+myNotifyHeader	dc.b 12		; clear the screen
+	dc.b 'Event     A    X    Y',cr
+	dc.b '-------- ---- ---- ----',cr,0
+
+PrepareText	name
+	pha
+	pha
+	_SaveTextState
+	pla
+	sta stsHand
+	pla
+	sta stsHand+2
+*** set up the text tools
+	lda #3	;slot number
+	pha	;save slot
+	pea 0	;BASIC
+	pea 0
+	pea 3	;always input from slot 3?
+	_SetInputDevice
+	pla	;get slot
+	pea 0	;BASIC
+	pea 0
+	pha	;output slot #
+	_SetOutputDevice
+* init the devices
+	pea 0	;input
+	_InitTextDev
+	pea 1	;output
+	_InitTextDev
+* set in/out globals
+	pea $ff	;and
+	pea $80	;or
+	_SetOutGlobals
+	pea $7f	;and
+	pea 0	;or
+	_SetInGlobals
+	rts
+
+RestoreText	name
+	lda stsHand+2
+	beq @dun
+	pha
+	lda stsHand
+	pha
+	_RestoreTextState
+	stz stsHand+2
+	stz stsHand
+@dun	rts
+
+stsHand	dc.l 0
+
+myPrWord	name
+	pha
+	xba
+	jsr myPrbyte
+	pla		;fall into prbyte
+myPrbyte	name
+	pha
+	lsr a
+	lsr a
+	lsr a
+	lsr a
+	jsr MyPrnib
+	pla		;fall into prnib
+myPrnib	and #$000f
+	ora #'0'
+	cmp #'9'+1
+	bcc myCout
+	adc #6
+	bra myCout
+
+mySpout	name
+	lda #$0020
+	bra myCout
+myCrout	name
+	lda #$000d
+myCout	name
+	pha
+	_WriteChar
+	rts
+
+**************************************************************
+**************************************************************
+*
+* xxxx\ri -- resource info
+*
+**************************************************************
+nameRInfo	dc.b 2,'ri'
+
+helpRInfo	name
+	pushlong #msgHlpRInfo
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+
+msgHlpRInfo	dc.b 'xxx\ri displays info on handles of the specified resource ID',cr
+	dc.b 0
+
+cmdRInfo	name
+	jsr GetNum1
+	sta targetRType
+
+	jsr ShowMemHdr
+
+	pushlong #rscanParms
+	pea nlScanHandles
+	jsl NLService
+	rtl
+
+rscanParms	dc.w 0	;allocated handles
+	dc.l InfoRec	;used only for setting bank reg
+	dc.l riFilter
+
+targetRType dc.w 0
+*
+* riFilter--called by NL once for every handle in the chain
+*
+riFilter	name
+	phd		;called with handle (pascal style)
+	tsc
+	tcd		;handle is at 6
+
+	pha
+	_GetCurResourceApp
+	ldy #6
+	lda [6],y
+	pha
+	_SetCurResourceApp
+
+	pushlong #theType
+	pei 8
+	pei 6
+	_MatchResourceHandle
+
+	pla	;get old resource app
+	php	;save error status from MatchResourceHandle
+
+	pha
+	_SetCurResourceApp
+	
+	plp	;error from MatchResourceHandle
+	bcs @noPrint
+	
+	lda targetRType
+	beq @print
+	cmp theType
+	bne @noPrint
+
+@print	pei 8
+	pei 6
+	pea nlHandleInfo
+	jsl NLService
+
+@noPrint	pld
+	lda 2,s
+	sta 6,s
+	lda 1,s
+	sta 5,s
+	pla
+	pla
+	rtl
+
+theType	dc.w 0
+theID	dc.l 0
+
+**************************************************************
+**************************************************************
+*
+* xxxxxx\hsize -- show handles with specified size
+*
+**************************************************************
+nameHSize	dc.b 5,'hsize'
+
+helpHSize	name
+	pushlong #msgHlpHSize
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+
+msgHlpHSize	dc.b 'xxx\hsize displays info on handles with the specified size',cr
+	dc.b 0
+
+cmdHSize	name
+	pha
+	pha
+	pushlong #RangeBuffer
+	pea nlGetRange
+	jsl NLService
+	pla
+	pla
+	ldy rawStart+2
+	lda rawStart
+	sty targetSize+2
+	sta targetSize
+
+	jsr ShowMemHdr
+
+	pushlong #SizeScanParms
+	pea nlScanHandles
+	jsl NLService
+	rtl
+
+SizeScanParms	dc.w 0	;allocated handles
+	dc.l InfoRec	;used only for setting bank reg
+	dc.l sizeFilter
+
+targetSize	dc.l 0
+*
+* sizeFilter--called by NL once for every handle in the chain
+*
+sizeFilter	name
+	phd		;called with handle (pascal style)
+	tsc
+	tcd		;handle is at 6
+
+	pha
+	pha
+	pei 8
+	pei 6
+	_GetHandleSize
+	ply
+	pla
+	cmp targetSize+2
+	bne @noPrint
+	cpy targetSize
+	bne @noPrint
+
+@print	pei 8
+	pei 6
+	pea nlHandleInfo
+	jsl NLService
+
+@noPrint	pld
+	lda 2,s
+	sta 6,s
+	lda 1,s
+	sta 5,s
+	pla
+	pla
+	rtl
+
+**************************************************************
+**************************************************************
+*
+* xxxxxx\names -- search for named procedures in range, handle
+*                 or all handles owned by an ID.
+*
+**************************************************************
+nameNames	dc.b 5,'names'
+
+helpNames	name
+	pushlong #msgHlpNames
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+
+msgHlpNames	dc.b '\names searches memory for names imbedded at the beginnings of routines.',cr
+	dc.b cr
+	dc.b 'Syntax:',cr
+	dc.b '  start.end\names',cr
+	dc.b '  handle\names',cr
+	dc.b '  memid\names (does wild ID matching like I command)',cr
+	dc.b cr
+	dc.b 'Examples:',cr
+	dc.b '  2/0.3ffff\names',cr
+	dc.b '  e01234\names',cr
+	dc.b '  1003\names',cr
+	dc.b '  0\names',cr
+	dc.b cr
+	dc.b 'Note: \names can''t currently search language-card RAM.',cr
+	dc.b 0
+
+cmdNames	name
+	jsr ShowNamesHdr
+
+	pha
+	pha
+	pushlong #RangeBuffer
+	pea nlGetRange
+	jsl NLService
+	pla
+	plx
+
+	cmp #2		;2 parameters?
+	beq @rng
+	lda rawStart+2
+	bne @hand
+
+	jsr NamesByID		;1003\find ...
+	jsr crout
+	rtl
+
+@hand	pushlong rawStart		;e01700\find ...
+	_CheckHandle
+	bcs @badHand
+	
+	pushlong rawStart
+	jsl NamesByHandle
+	jsr crout
+	rtl
+
+@rng	jsr NamesRng		;1/2000.3000\find ...
+	jsr crout
+	rtl
+
+@badHand	pushlong #badHandMsg
+@msg	pea nlWriteCStr
+	jsl NLService
+	rtl
+
+*
+* NamesByID--search all the handles with the specified ID
+*
+NamesByID	name
+	lda rStart
+	sta targetID
+	pushlong #NamesByIDPrms
+	pea nlScanHandles
+	jsl NLService
+	rts
+
+NamesByIdPrms	dc.w 0	;allocated handles
+	dc.l InfoRec	;used only for setting bank reg
+	dc.l NamesFilter
+
+*
+* NamesByHandle
+*
+NamesByHandle	name
+	phd
+	tsc
+	tcd
+	ldy #6
+	lda [6],y
+	sta targetID
+	pld
+;
+; v v v v v  fall into NamesFilter
+*
+* NamesFilter--called by NL once for every handle in the chain
+*
+NamesFilter	name	;called with handle (pascal style)
+	phd
+	tsc
+	tcd	;handle is at 6
+	ldy #4	;offset to handle's flags
+	lda [6],y
+	and #$0017	;could there reasonably be code in here?
+	beq @exit	
+	ldy #6	;offset to handle ID
+	lda [6],y
+	beq @exit	;don't search handles with ID=$0000
+	jsr CompareToTarg
+	bcs @exit
+
+	lda [6]
+	sta rStart
+	clc
+	ldy #8
+	adc [6],y
+	sta rEnd
+	ldy #2
+	lda [6],y
+	sta rStart+2
+	ldy #10
+	adc [6],y
+	sta rEnd+2
+	jsr NamesRng
+
+@exit	pld
+	lda 2,s
+	sta 6,s
+	lda 1,s
+	sta 5,s
+	pla
+	pla
+	rtl
+
+*
+* NamesRng--search in rStart..rEnd for named procedures
+*
+NamesRng	name
+	phd
+	pushlong rEnd
+	pushlong rStart
+	tsc
+	tcd		;1=start, 5=end
+	sec
+	lda 1
+	sbc 5
+	sta 5
+	lda 3
+	sbc 7
+	sta 7		;5 = start-end
+	bpl @x		;bad range (start>end, etc)
+@srch	jsr NamesCore
+	bcs @x
+	jsr ShowFoundName
+	inc 1
+	bne @a
+	inc 3
+@a	inc 5
+	bne @srch
+	inc 7
+	bne @srch
+@x	pla
+	pla
+	pla
+	pla
+	pld
+	rts
+
+*
+* NamesCore--call with [1] = start, [5] = -length remaining
+*
+* Searches at [1] for a named procedure
+*
+* Returns SEC=finished, CLC=found at [1] & AY=pString ptr
+*
+NamesCore	name
+	lda 7
+	ora 5
+	beq @fail		;no bytes to search
+@core	lda [1]
+	and #$00ff
+	cmp #$0082	;BRL
+	bne @advance
+	pha
+	pha	;space for result
+	pei 3
+	pei 1
+	pea nlGetProcName
+	jsl NLService
+	ply
+	pla
+	bne @success
+	tyx
+	beq @advance
+@success	clc
+	rts	;return success
+
+@advance	inc 1
+	bne @c
+	inc 3
+@c	inc 5
+	bne @core
+	inc 7
+	bne @core
+@fail	sec		;return failure
+	rts
+*
+* ShowNamesHdr
+*
+ShowNamesHdr	name
+	pushlong #NamesHdr
+	pea nlWriteCStr
+	jsl NLService
+	rts
+
+NamesHdr	dc.b ' id  address name',cr
+	dc.b '---- ------- ----',cr,0
+*
+* ShowFoundName
+*
+* AY = pointer to name string
+* <1 = address found
+*
+*  id  address name
+* ---- ------- ----
+* 5001 07/1234 MyProc
+*
+ShowFoundName	name
+	pha
+	phy	;address of pString
+
+	jsr GetID
+	jsr prwordSpout
+	pha
+	pei 3
+	pea nlWriteByte
+	jsl NLService
+	lda #'/'
+	jsr cout
+	lda 1
+	jsr prwordSpout
+	lda 3
+	ldy 1
+	pea nlShowStr	;string already on stack
+	jsl NLService
+	brl crout
+
+*
+* GetID:  AY=address, return A=ID of owner handle
+*
+GetID	name
+	pha
+	pha
+	pha
+	phy
+	_FindHandle
+	lda #0	;anticipate error
+	bcs @err
+	phd
+	tsc
+	tcd
+	ldy #6
+	lda [3],y
+	pld
+@err	ply
+	ply
+	rts
+
+**************************************************************
+**************************************************************
+*
+* \SHRLoad expression -- save a $C1;0 screen dump from $E12000
+*
+**************************************************************
+nameSHRLoad	dc.b 7,'shrload'
+
+helpSHRLoad	name
+	pushlong #msgHlpSHRLoad
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+
+msgHlpSHRLoad	dc.b '\shrload "pathname" -- load the super-hires screen from a file',cr
+	dc.b 0
+
+cmdSHRLoad	name
+	clc
+	bra SHRLoadOrSave
+
+**************************************************************
+**************************************************************
+*
+* \SHRSave expression -- save a $C1;0 screen dump from $E12000
+*
+**************************************************************
+nameSHRSave	dc.b 7,'shrsave'
+
+helpSHRSave	name
+	pushlong #msgHlpSHRSave
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+
+msgHlpSHRSave	dc.b '\shrsave "pathname" -- save the super-hires screen to a $C1/0 file',cr
+	dc.b 0
+
+cmdSHRSave	name
+	sec
+SHRLoadOrSave	ror SHRSaveFlag
+
+	jsr EvalExpr	;into ExprBuff (ExprLen=GS/OS String)
+
+	lda #$00E1
+	sta theScreenAddr+2
+	pea 0
+	_GetMasterSCB
+	pla
+	bpl @noShadow
+	lda #$0001
+	sta theScreenAddr+2
+@noShadow
+
+	bit SHRSaveFlag
+	bpl @noCreate
+	_CreateGS CreateParms
+	bcs @err
+
+@noCreate	_OpenGS OpenParms
+	bcs @err
+
+	lda OpenRefNum
+	sta WriteRefNum
+	sta WriteRefNum2
+	sta CloseRefNum
+
+	jsr ReadOrWrite
+	php
+	pha
+	_CloseGS CloseParms
+	pla
+	plp
+
+@err	bcs @ouch
+	rtl
+
+@ouch	pha
+	jsr crout
+	pla
+	brl ErrorNumberA
+
+ReadOrWrite	bit SHRSaveFlag
+	bmi @save
+	_ReadGS WriteParms
+	bcs @err
+	_ReadGS WriteParms2
+@err	rts
+@save	_WriteGS WriteParms
+	bcs @err
+	_WriteGS WriteParms2
+	rts
+
+SHRSaveFlag	dc.w 0
+
+CreateParms	dc.w 4
+	dc.l ExprLen
+	dc.w $00E3	;unlocked
+	dc.w $00C1
+	dc.l 0
+
+OpenParms	dc.w 3
+OpenRefNum	dc.w 0
+	dc.l ExprLen
+	dc.w 0	;request as-allowed access
+
+WriteParms	dc.w 4
+WriteRefNum	dc.w 0
+theScreenAddr	dc.l $00E12000
+	dc.l $00008000-$300
+	dc.l 0
+
+WriteParms2	dc.w 4
+WriteRefNum2	dc.w 0
+	dc.l $00E19D00
+	dc.l $00000300
+	dc.l 0
+
+CloseParms	dc.w 1
+CloseRefNum	dc.w 0
+
+**************************************************************
+**************************************************************
+*
+* \80save expression -- save text screen into a TXT file
+* \40save expression
+* \tsave expression -- save the current text screen
+*
+**************************************************************
+name80save	dc.b 6,'80save'
+
+help80Save	name
+	pushlong #msgHlp80Save
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+
+msgHlp80save	dc.b '\80save "pathname" -- save the 80-column text screen to a new TXT file',cr
+	dc.b 0
+
+name40save	dc.b 6,'40save'
+
+help40Save	name
+	pushlong #msgHlp40Save
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+
+msgHlp40save	dc.b '\40save "pathname" -- save the 40-column text screen to a new TXT file',cr
+	dc.b 0
+
+PreCDAscreen	equ $E01400	;copy of the bank E0/E1 screen
+NListScreen	equ $E00400	;the real text screen
+
+nameTSave	dc.b 5,'tsave'
+
+helpTSave	name
+	pushlong #msgHlpTSave
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+
+msgHlpTSave	dc.b '\tsave "pathname" -- save the current Nifty List screen to a new TXT file',cr
+	dc.b 0
+
+cmdTSave	name
+	sec
+	ror tx80flag
+	lda #<NListScreen
+	sta offsetToScreen
+	sec
+	ror tsave_flag
+	bra save_common
+
+cmd40save	name
+	clc
+	bra save40_80
+cmd80save	name
+	sec
+save40_80	ror tx80flag
+	lda #<preCDAScreen
+	sta offsetToScreen
+	lsr tsave_flag
+
+save_common	jsr EvalExpr	;into ExprBuff (ExprLen=GS/OS String)
+
+	_CreateGS txCreateParms
+	bcs @err
+	_OpenGS OpenParms
+	bcs @err
+
+	lda OpenRefNum
+	sta txWriteRefNum
+	sta CloseRefNum
+
+	jsr SaveTheScreen
+
+	php
+	pha
+	_CloseGS CloseParms
+	pla
+	plp
+
+@err	bcs @ouch
+	rtl
+
+@ouch	pha
+	jsr crout
+	pla
+	brl ErrorNumberA
+
+SaveTheScreen	name
+	lda #80
+	bit tx80flag
+	bmi @is80
+	lsr a
+@is80	inc a	;for trailing CR
+	sta txWriteLen
+
+	lda #$0d0d
+	sta singleLine+39
+	sta singleLine+79
+
+	ldx #0	;line number times 2
+@nextLine	phx
+	jsr WriteOneLine
+	plx
+	bcs @err
+	inx
+	inx
+	cpx #48
+	bcc @nextLine
+	clc
+@err	rts
+
+
+WriteOneLine	lda screenAddresses,x
+	clc
+	adc offsetToScreen
+	bit tx80flag
+	bmi @build80
+
+@build40	pea PreCDAScreen>>16
+	pha
+	pushlong #singleLine
+	pea 0
+	pea 40
+	_BlockMove
+	bra @built
+
+@build80	sta @selfmod1+1
+	bit tsave_flag
+	bmi @saving_e0e1
+
+	clc	;2nd half is $400 bytes later, same bank
+	adc #$0400
+	sta @selfmod2+1
+	lda #^PreCDAScreen
+	bra @together
+
+@saving_e0e1	sta @selfmod2+1	;2nd half is at same location in bank $E1
+	lda #$E1	
+
+@together	sep #$20
+	sta @selfMod2+3
+	rep #$20
+
+	ldx #0
+	txy
+	sep #$20
+@selfmod1	lda >PreCDAScreen,x
+;;;	asl a
+;;;	lsr a
+	sta singleLine+1,y
+@selfmod2	lda >PreCDAScreen,x
+;;;	asl a
+;;;	lsr a
+	sta singleLine,y
+	inx
+	iny
+	iny
+	cpx #40
+	bcc @selfmod1
+	rep #$20
+
+@built
+;
+; Translate characters from screen codes into character codes,
+; using $80..$9F for MouseText (screen codes are $40..$5F).
+;
+	sep #$20
+	longa off
+
+	ldx #79
+@xlateOne	lda singleLine,x
+	cmp #$40
+	bcc @notMouseText
+	cmp #$60
+	bcs @notMouseText
+	adc #$40
+	bra @storeIt
+@notMouseText	and #$7f
+@storeIt	sta singleLine,x
+	dex
+	bpl @xlateOne
+
+	rep #$20
+	longa on
+
+	_WriteGS txWriteParms
+	rts
+
+
+offsetToScreen	dc.w 0
+tsave_flag	dc.w 0
+
+screenAddresses	DC.W $000,$080,$100,$180,$200,$280,$300,$380
+	DC.W $028,$0A8,$128,$1A8,$228,$2A8,$328,$3A8
+	DC.W $050,$0D0,$150,$1D0,$250,$2D0,$350,$3D0
+
+
+tx80flag	dc.w 0
+
+txCreateParms	dc.w 4
+	dc.l ExprLen
+	dc.w $00E3	;unlocked
+	dc.w $0004	;TXT
+	dc.l 0
+
+txWriteParms	dc.w 4
+txWriteRefNum	dc.w 0
+	dc.l singleLine
+txWriteLen	dc.l 0
+	dc.l 0
+
+singleLine	dc.b 81	;room for 1 line + CR
+
+**************************************************************
+**************************************************************
+*
+* nnnn\hcgs -- display a HyperCardIIGS callback name
+*
+**************************************************************
+nameHCGS	dc.b 4,'hcgs'
+
+helpHCGS	name
+	pushlong #msgHlpHCGS
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+
+msgHlpHCGS	dc.b 'nnnn\hcgs -- display a HyperCardIIGS callback name (0=all)',cr
+	dc.b 0
+
+cmdHCGS	name
+	jsr GetNum1		;into YA
+	ldx #nlSecHyperCard
+	stz ExtraString
+	brl ShowSectionInfo
+
+
+**************************************************************
+**************************************************************
+*
+* nnnn\reqcode -- display a Request Code name
+*
+**************************************************************
+nameReqCode	dc.b 7,'reqcode'
+
+helpReqCode	name
+	pushlong #msgHlpReqCode
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+
+msgHlpReqCode	dc.b 'nnnn\reqcode -- display a Request Code name (0=all)',cr
+	dc.b 0
+
+cmdReqCode	name
+	jsr GetNum1		;into YA
+	ldx #nlSecReqCode
+	stz ExtraString
+	brl ShowSectionInfo
+
+
+**************************************************************
+**************************************************************
+*
+* \Res -- dump resource manager globals
+*
+**************************************************************
+nameRes	dc.b 3,'res'
+
+helpRes	name
+	pushlong #msgHlpRes
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+
+msgHlpRes	dc.b '\res --display Resource Manager global information',cr
+	dc.b 0
+
+cmdRes	name
+	pea 0
+	_ResourceStatus
+	pla
+	bne @1
+	brl @done
+@1	pha
+	pha
+	pea 0	;system tool set
+	pea #$1E	;resource manager
+	_GetWAP
+	phd
+	tsc
+	tcd
+	lda [3]
+	sta rmPtr
+	sta addr
+	ldy #2
+	lda [3],y
+	sta rmPtr+2
+	sta addr+2
+	pld
+	pla
+	sta rmHandle
+	pla
+	sta rmHandle+2
+
+	lda #ResGlobTable>>16
+	ldy #ResGlobTable
+	jsr DumpByTbl
+
+	pushlong #appHeader
+	pea nlWriteCStr
+	jsl NLService
+
+	clc
+	lda rmPtr
+	adc #$02b8	;offset to appList
+	sta addr
+	lda rmPtr+2
+	adc #0
+	sta addr+2
+@Dump1App	ldy #0
+	jsr GetWordY
+	tax
+	beq @tryNext
+	inc a
+	beq @done
+	ldy #2
+	jsr prwordY	;printed app ID
+	jsr spout
+	ldy #6
+	jsr prbyteY
+	ldy #4
+	jsr prwordY	;printed first map handle
+	jsr spout
+	ldy #10
+	jsr prbyteY
+	ldy #8
+	jsr prwordY	;printed current map handle
+	jsr spout
+	ldy #14
+	jsr prbyteY
+	ldy #12
+	jsr prwordY	;printed converter handle
+	jsr spout
+	ldy #16
+	jsr prwordY
+	jsr spout
+	ldy #18
+	jsr prwordY
+	jsr crout
+	ldy #12
+	jsr DumpCvtList2
+@tryNext	clc
+	lda addr
+	adc #20	;size of application record
+	sta addr
+	bcc @inc
+	inc addr+2
+@inc	bra @Dump1App
+
+@done	rtl
+
+ResGlobTable	dc.w rg01,dumpLng,$2B0
+	dc.w rg02,dumpCvtList,$2B4
+	dc.w 0
+
+rg01	dc.b    '     sysFileMap: ',0
+rg02	dc.b cr,' sysConvertList: ',0
+
+appHeader	dc.b 'ID   First  Curr   ConvH  Read Depth',cr
+	dc.b '---- ------ ------ ------ ---- -----',cr,0
+
+rmHandle	dc.l 0
+rmPtr	dc.l 0
+
+prbyteY	jsr GetWordY
+	brl prbyte
+prwordY	jsr GetWordY
+	brl prword
+
+dumpCvtList	name
+	phy
+	jsr dumpLng
+	jsr crout
+	ply
+dumpCvtList2	iny
+	iny
+	jsr GetWordY
+	pha
+	dey
+	dey
+	jsr GetWordY
+	pha	;pushed converter handle on stack
+	phd
+	tsc
+	tcd
+	lda 4
+	beq @done
+	lda [3]
+	tax
+	ldy #2
+	lda [3],y
+	sta 5
+	stx 3	;derefed converter handle to 3
+	lda [3]
+	beq @done
+	pha
+	lda #2
+	jsr Bump3
+	pla
+@nextConv	pha
+	lda [3]
+	beq @doNext
+	pushlong #oneConverter
+	pea nlWriteCStr
+	jsl NLService
+	lda [3]
+	jsr prword
+	pushlong #oneConverter2
+	pea nlWriteCStr
+	jsl NLService
+	ldy #4
+	lda [3],y
+	jsr prword
+	ldy #2
+	lda [3],y
+	jsr prword
+	jsr crout
+@doNext	lda #6
+	jsr Bump3
+	pla
+	dec a
+	bne @nextConv
+@done	pld
+	pla
+	pla
+	rts
+
+Bump3	clc
+	adc 3
+	sta 3
+	bcc @x
+	inc 5
+@x	rts
+
+oneConverter	dc.b '      resType = $',0
+oneConverter2	dc.b ', convAddress = $',0
+
+**************************************************************
+**************************************************************
+*
+* xxxxxx\IDInfo -- 
+*
+**************************************************************
+nameIDInfo	dc.b 6,'idinfo'
+
+helpIDInfo	name
+	pushlong #msgHlpIDInfo
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+
+msgHlpIDInfo	dc.b 'xxxx\IDInfo -- summarize memory use by given memory ID',cr
+	dc.b 0
+
+cmdIDInfo	name
+	jsr GetNum1
+	tay
+	and #$00ff
+	php
+	tya
+	plp
+	bne cmdIDInfo2
+
+@tryMainID	tya
+	pha
+	jsl cmdIDInfo2
+	pla
+	inc a
+	tay
+	and #$00ff
+	bne @tryMainID
+	rtl
+
+cmdIDInfo2	and #$f0ff
+	sta infoID
+
+	ldx #zapEnd-zapStart-2
+@zap	stz zapStart,x
+	dex
+	dex
+	bpl @zap
+
+	pushlong #idScanParms
+	pea nlScanHandles
+	jsl NLService
+
+	lda infoTotalCount
+	bne @something
+	rtl	;nothing to display for this ID
+@something
+; display table header
+	pushlong #infoHdr
+	pea nlWriteCStr
+	jsl NLService
+
+	lda #0	;loop for all aux ids
+@oneAuxID	pha
+
+	asl a
+	tax
+	lda infoCountTable,x
+	beq @tryNextAux
+
+	lda 1,s
+	xba
+	ora infoID
+	jsr prword
+	jsr sp3
+
+	lda 1,s
+	asl a
+	tax
+	lda infoCountTable,x
+	jsr prword
+	jsr sp3
+
+	lda 1,s
+	asl a
+	asl a
+	tax
+	lda infoSizeTable,x
+	pha
+	lda infoSizeTable+2,x
+	jsr prword
+	pla
+	jsr prword
+
+; display pathname
+	jsr sp3
+	lda 1,s	;aux ID index (0..F)
+	xba
+	ora infoID
+	beq @noPath
+	ldx #0
+	phx
+	phx	;space for path ptr
+	pha
+	pea 1	;file number
+	_LGetPathname2
+	ply
+	plx
+	bcs @noPath
+	phx
+	phy
+	pea nlShowWString
+	jsl NLService
+@noPath
+	jsr crout
+
+@tryNextAux	pla
+	inc a
+	cmp #$0010
+	bcc @oneAuxID
+
+; display trailer ID: 1x34
+	lda infoID
+	xba
+	lsr a
+	lsr a
+	lsr a
+	lsr a
+	and #$000f
+	ora #'0'
+	cmp #'9'+1
+	bcc @out
+	adc #'A'-'9'-2
+@out	jsr cout
+	lda #'x'
+	jsr cout
+	lda infoID
+	jsr prbyte
+	jsr sp3
+
+	lda infoTotalCount
+	jsr prword
+	jsr sp3
+	lda infoTotalSize+2
+	jsr prword
+	lda infoTotalSize
+	jsr prword
+	jsr crout
+	rtl
+
+sp3	jsr spout
+	jsr spout
+	brl spout
+
+idScanParms	dc.w 0	;allocated handles
+	dc.l InfoRec	;used only for setting bank reg
+	dc.l infoFilter
+
+infoID	dc.w 0
+*
+* infoFilter--called by NL once for every handle in the chain
+*
+infoFilter	name
+	phd	;called with handle (pascal style)
+	tsc
+	tcd	;handle is at 6
+
+	ldy #6	;offset to ID
+	lda [6],y
+	tax
+	and #$f0ff
+	cmp infoID
+	bne @ignore
+
+	txa
+	xba
+	and #$000f	;aux id
+	asl a
+	pha
+	tax
+	inc infoCountTable,x
+	inc infoTotalCount
+
+	pla
+	asl a
+	tax	;x = aux id * 4
+
+	clc
+	ldy #8	;size
+	lda [6],y
+	adc infoTotalSize
+	sta infoTotalSize
+	iny
+	iny
+	lda [6],y
+	adc infoTotalSize+2
+	sta infoTotalSize+2
+
+	clc
+	ldy #8
+	lda [6],y
+	adc infoSizeTable,x
+	sta infoSizeTable,x
+	iny
+	iny
+	lda [6],y
+	adc infoSizeTable+2,x
+	sta infoSizeTable+2,x
+
+@ignore	pld
+	lda 2,s
+	sta 6,s
+	lda 1,s
+	sta 5,s
+	pla
+	pla
+	rtl
+
+zapStart
+infoCountTable	ds.w 16
+infoSizeTable	ds.l 16	;16 longs
+infoTotalSize	dc.l 0
+infoTotalCount	dc.w 0
+zapEnd
+
+
+infoHdr	dc.b cr
+	dc.b 'MemID  Count  Size',cr
+	dc.b '-----  -----  --------',cr,0
+
+
+**************************************************************
+*
+* xxxx\strings -- search for printable strings
+*
+* id\strings -- search all blocks of specified ID (0=wild)
+* handle\strings -- search handle
+* start.end\strings -- search address range
+*
+**************************************************************
+nameStrings	dc.b 7,'strings'
+
+helpStrings	name
+	pushlong #msgHlpStrings
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+
+msgHlpStrings	dc.b 'Search memory for printable strings.',cr,cr
+	dc.b 'Syntax:',cr
+	dc.b '  start.end\strings',cr
+	dc.b '  handle\strings',cr
+	dc.b '  memid\strings  (does wild ID matching like I command)',cr
+	dc.b cr
+	dc.b 'Examples:',cr
+	dc.b '  2/0.3ffff\strings',cr
+	dc.b '  e01234\strings',cr
+	dc.b '  1003\strings',cr
+	dc.b '  0\strings',cr
+	dc.b 0
+
+qualifyLength	dc.w 6	;need 6 characters to count as a string
+
+cmdStrings	name
+	pha
+	pha
+	pushlong #RangeBuffer
+	pea nlGetRange
+	jsl NLService
+	pla
+	plx
+
+	cmp #2		;2 parameters?
+	beq @rng
+	lda rawStart+2
+	bne @hand
+
+	jsr StringsByID		;1003\strings
+	rtl
+
+@hand	pushlong rawStart		;e01700\strings
+	_CheckHandle
+	bcs @badHand
+	
+	pushlong rawStart
+	jsl StringsByHandle
+	rtl
+
+@rng	jsr StringsRange		;1/2000.3000\strings
+	rtl
+
+@badHand	pushlong #badHandMsg
+@msg	pea nlWriteCStr
+	jsl NLService
+	rtl
+
+*
+* StringsByID--search for strings in all handles with the specified ID
+*
+StringsByID	name
+	lda rStart
+	sta targetID
+	pushlong #StringsByIDPrms
+	pea nlScanHandles
+	jsl NLService
+	rts
+
+StringsByIdPrms	dc.w 0	;allocated handles
+	dc.l InfoRec	;used only for setting bank reg
+	dc.l StringsFilter
+
+*
+* StringsByHandle
+*
+StringsByHandle	name
+	phd
+	tsc
+	tcd
+	ldy #6
+	lda [6],y
+	sta targetID
+	pld
+; v v v v v  fall into SearchFilter
+*
+* StringsFilter--called by NL once for every handle in the chain
+*
+StringsFilter	name	;called with handle (pascal style)
+	phd
+	tsc
+	tcd	;handle is at 6
+	ldy #6	;offset to handle ID
+	lda [6],y
+	beq @exit
+	jsr CompareToTarg
+	bcs @exit
+
+	lda [6]
+	sta rStart
+	clc
+	ldy #8
+	adc [6],y
+	sta rEnd
+	ldy #2
+	lda [6],y
+	sta rStart+2
+	ldy #10
+	adc [6],y
+	sta rEnd+2
+	jsr StringsRange
+
+@exit	pld
+	lda 2,s
+	sta 6,s
+	lda 1,s
+	sta 5,s
+	pla
+	pla
+	rtl
+
+*
+* StringsRange--search in rStart..rEnd for strings
+*
+StringsRange	name
+	phd
+	pushlong rStart	;initial value of @mark
+	pushlong rEnd	;initial value of @length/@end
+	pushlong rStart	;initial value of @start
+	pea 0	;state (0=searching, 2=printing)
+	pea 0	;curLength
+	tsc
+	tcd
+
+@curLength	equ 1
+@state	equ @curLength+2
+@start	equ @state+2
+@end	equ @start+4
+@length	equ @end	;same as @end
+@mark	equ @length+4
+
+	sec
+	lda @start
+	sbc @end
+	sta @length
+	lda @start+2
+	sbc @end+2
+	sta @length+2	;@length = negative amount of space left
+
+	lda @length+2
+	bpl @x	;bad range (start>end, etc)
+
+@loop	lda [<@start]
+	jsr @Analyze	;CLC = printable, char in A
+	ldx <@state
+	jsr (@StringStates,x)
+	inc <@start
+	bne @1
+	inc <@start+2
+@1	inc <@length
+	bne @loop
+	inc <@length+2
+	bne @loop
+
+	sec	;nonprintable--finish it off
+	ldx <@state
+	jsr (@StringStates,x)
+
+@x	pla	;kill @curLength
+	pla	;kill @state
+	pla
+	pla	;kill @start
+	pla
+	pla	;kill @length
+	pla
+	pla	;kill @mark
+	pld
+	rts
+
+@Analyze	and #$00ff
+	cmp #$0020
+	bcc @notPrt
+	cmp #$007f
+	rts
+@notPrt	sec
+	rts
+
+@StringStates	dc.w @Searching,@Printing
+
+@Searching	bcc @continue	;CLC=printable
+@startOver	stz <@state
+	stz <@curLength
+	lda <@start+2
+	ldx <@start
+	inx
+	bne @nr
+	inc a
+@nr	sta <@mark+2
+	stx <@mark
+	rts
+@continue	inc <@curLength
+	ldx <@curLength
+	cpx qualifyLength
+	bcc @rts
+	lda #2	;enter the Printing state
+	sta <@state
+@rts	rts
+
+@Printing	bcc @continue
+	pha
+	pei <@mark+2
+	pea nlWriteByte
+	jsl NLService
+	lda #'/'
+	jsr cout
+	lda <@mark
+	jsr prword
+	lda #':'
+	jsr cout
+	jsr spout
+	lda <@curLength
+	sta showStrParms
+	lda <@mark+2
+	ldx <@mark
+	sta showStrParms+4
+	stx showStrParms+2
+	pushlong #showStrParms
+	pea nlShowText
+	jsl NLService
+	jsr crout
+	bra @startOver
+
+showStrParms	dc.w 0	;string length
+	dc.l 0	;string pointer
+
+
+**************************************************************
+**************************************************************
+*
+* xxxxxx\deskpat -- 
+*
+**************************************************************
+nameDeskPat	dc.b 7,'deskpat'
+
+helpDeskPat	name
+	pushlong #msgHlpDeskPat
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+
+msgHlpDeskPat	dc.b 'xxx\deskpat -- set desktop pattern',cr
+	dc.b 0
+
+deskError	_SysBeep
+	rtl
+
+cmdDeskPat	name
+	pea 0
+	_WindStatus
+	pla
+	beq deskError
+
+	pea 3	;delete
+	pea 2	;desktop message
+	pha
+	pha	;ignored
+	_MessageCenter
+
+	lda #32+8
+	jsr allochand
+	bcs deskError
+	sta pattHand+2
+	sty pattHand
+
+	pha
+	pha
+	_Get640Colors
+
+	jsr GetNum1
+	asl a
+	asl a
+	asl a
+	asl a
+	asl a
+	clc
+	adc 1,s
+	sta 1,s	;source
+	pushlong pattHand	;dest
+	phd
+	tsc
+	tcd
+	ldy #2
+	lda [3],y
+	tax
+	lda [3]
+	sta 3
+	stx 5
+	lda #0
+	ldy #6
+	sta [3],y	;set Type = 0 (pattern)
+	clc
+	lda 3
+	adc #8
+	sta 3
+	pld
+	pushlong #32	;size
+	_BlockMove
+
+	pea 1	;add
+	pea 2	;desktop message
+	pushlong pattHand
+	_MessageCenter
+
+	pushlong pattHand
+	_DisposeHandle
+
+	jsr updateTheDesktop
+
+@exit	rtl
+
+pattHand	dc.l 0
+
+allocHand	pha
+	pha	;space for handle
+	pea 0	;size (high)
+	pha	;size (low)
+	pha	;space for ID
+	_MMStartUp
+	pea $C018	;attr
+	pha
+	pha	;ignored
+	_NewHandle
+	ply
+	plx
+	bcs @out
+	txa
+@out	rts
+
+
+updateTheDesktop	name
+	pha
+	pha	;space for Desktop result
+	pea 8	;check desk message
+	pha
+	pha	;ignored
+	_Desktop
+	pla
+	pla
+
+	pea 5	;SetDeskPat
+	pha
+	pha
+	pea 4	;GetDeskPat
+	pha
+	pha
+	_Desktop	;get desk pattern
+	_Desktop	;set desk pattern
+
+	rts
+
+**************************************************************
+**************************************************************
+*
+* xxxxxx\DeskPic -- 
+*
+**************************************************************
+nameDeskPic	dc.b 7,'DeskPic'
+
+helpDeskPic	name
+	pushlong #msgHlpDeskPic
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+
+msgHlpDeskPic	dc.b '\DeskPic "pathname" --  set desktop message to picture',cr
+	dc.b 0
+
+cmdDeskPic	name
+	pea 0
+	_WindStatus
+	pla
+	bne @ok
+	rtl
+
+@ok	jsr EvalExpr	;into ExprBuff (ExprLen=GS/OS String)
+
+	lda #32008
+	jsr allocHand
+	bcs @err
+	sta picHandle+2
+	sty picHandle
+
+	phd
+	pha
+	phy
+	tsc
+	tcd
+	ldy #2
+	lda [1],y
+	tax
+	lda [1]
+	sta 1
+	stx 3
+	ldy #6
+	lda #1	;picture
+	sta [1],y
+	lda 1
+	adc #8
+	sta deskMsgAddress
+	stx deskMsgAddress+2
+	plx
+	plx
+	pld
+
+	_OpenGS OpenParms
+	bcs @err
+
+	lda OpenRefNum
+	sta deskReadRefNum
+	sta CloseRefNum
+
+	_ReadGS deskReadParms
+
+	php
+	pha
+	_CloseGS CloseParms
+	pla
+	plp
+@err	bcs @ouch
+
+	pea 3	;delete
+	pea 2	;desk message
+	pha
+	pha	;ignored
+	_MessageCenter
+
+	pea 1	;add
+	pea 2	;desk message
+	pushlong picHandle
+	_MessageCenter
+
+	jsr killPicHandle
+
+	jsr updateTheDesktop
+
+	rtl
+
+@ouch	pha
+	jsr killPicHandle
+	jsr crout
+	pla
+	brl ErrorNumberA
+
+killPicHandle	lda picHandle+1
+	beq @noPic
+	pushlong picHandle
+	_DisposeHandle
+	stz picHandle+1
+@noPic	rts
+
+picHandle	dc.l 0
+
+deskReadParms	dc.w 4
+deskReadRefNum	dc.w 0
+deskMsgAddress	dc.l $ffffffff
+	dc.l $00007d00
+	dc.l 0
+
+**************************************************************
+**************************************************************
+	if 0 then
+**************************************************************
+**************************************************************
+*
+* xxxxxx\%% -- 
+*
+**************************************************************
+name%%	dc.b x,'%%'
+
+help%%	name
+	pushlong #msgHlp%%
+	pea nlWriteCStr
+	jsl NLService
+	rtl
+
+msgHlp%%	dc.b 'xxx\%% ',cr
+	dc.b 0
+
+cmd%%	name
+
+	rtl
+	endif
+**************************************************************
+**************************************************************
+
+
+**************************************************************
+**************************************************************
+*
+* DumpByTbl
+*
+* AY = pointer to dump-table
+*
+**************************************************************
+DumpByTbl	name
+	phd
+	pha
+	phy
+	tsc
+	tcd
+dumpNxtT	lda [1]
+	beq dumpedTb
+	pea DumpByTbl>>16
+	lda [1]
+	pha
+	pea nlWriteCStr
+	jsl NLService
+	per dumpCont-1
+	ldy #2
+	lda [1],y
+	dec a
+	pha
+	ldy #4
+	lda [1],y
+	tay
+	rts
+dumpCont	pha
+	pha
+	pea nlPause
+	jsl NLService
+	clc
+	lda 1
+	adc #6
+	sta 1
+	lda 3
+	adc #0
+	sta 3
+	bra dumpNxtT
+dumpedTb	pla
+	pla
+	pld
+	brl crout
+*
+dumpStr	name
+	phy
+	lda #$22
+	jsr cout
+	ply
+	iny
+	iny
+	jsr GetWordY
+	pha
+	dey
+	dey
+	jsr GetWordY
+	pha
+	pea nlShowStr
+	jsl nlService
+	lda #$22
+	jsr cout
+	rts
+*
+dumpLng	name
+	phy
+	iny
+	iny
+	jsr dumpWrd
+	ply		;fall thru
+dumpWrd	jsr GetWordY
+	brl prword
+*
+* GetWordY -- get word at [addr],y
+*
+GetWordY	name
+	phx
+	phy
+	phx		;space for nlGetWord
+	phx
+	clc
+	tya
+	adc addr
+	tax
+	lda addr+2
+	adc #0
+	pha
+	phx
+	pea nlGetWord
+	jsl NLService
+	pla
+	ply		;high word--ignore
+	ply		;restore Y
+	plx		;restore X
+	rts
+
+addr	dc.l 0
+
+**************************************************************
+**************************************************************
+*
+* Action -- A=action code,  YX may point to some data
+*
+**************************************************************
+myAction	name
+	cmp #actDeath
+	bne @noDie
+	jsr ModuleDeath
+;	bra @done
+@noDie
+@done	lda #0
+	rtl
+
+ModuleDeath	name
+	pushlong #TestNotifyParms
+	pea $2035		;_DelNotifyProc
+	jsl $e100b0
+	rts
+
+**************************************************************
+**************************************************************
+*
+* misc subroutines
+*
+**************************************************************
+prwordSpout	name
+	jsr prword
+spout	name
+	pha
+	pha
+	pea nlSpout
+	jsl NLService
+	rts
+
+crout	name
+	pha
+	pha
+	pea nlCrout
+	jsl NLService
+	rts
+
+cout	name
+	pha
+	pha
+	pea nlWriteChar
+	jsl NLService
+	rts
+
+prword	name
+	pha
+	pha
+	pea nlWriteWord
+	jsl NLService
+	rts
+
+prbyte	name
+	pha
+	pha
+	pea nlWriteByte
+	jsl NLService
+	rts
+
+GetNum1	name
+	pha
+	pha
+	pushlong #nlgNUM1
+	pea nlGetAGlobal
+	jsl NLService
+	pla
+	ply
+	rts
+
+EvalExpr	name
+	pha
+	pha
+	pushlong #ExprBuff
+	pea nlEvalExpr
+	jsl NLService
+	pla
+	plx
+	rts
+
+	ENDP
+	END

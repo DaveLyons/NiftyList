@@ -1,0 +1,36 @@
+************************************************
+*
+* Nifty List module header to be linked with
+* main Pascal IIgs code.
+*
+* 4-Dec-91 Dave Lyons
+*
+************************************************
+ModuleHeader	proc export
+	IMPORT NDAOPEN,NDAACTION
+
+	dc.l NDAOPEN	; Pointer to the open routine
+	dc.l moduleClose	; Pointer to the close routine (RTL)
+	dc.l AsmAction	; Pointer to the action routine glue
+	dc.l moduleInit	; Pointer to the init routine (RTL)
+minNLVersion	dc.w $0330	; Minimum Nifty List version (3.3)
+	dc.w $0000	; reserved
+	dc.b '**'	; two place-holding characters
+NDAMenuLine	dc.b 'Sample Pascal Module'
+	dc.b '\H**'	; \H and two place-holding characters
+	dc.b 0	; The menu item string terminator
+
+AsmAction	pha	; reserve space for integer result
+	pha	; push the action code
+	phy	; push high word of event record addr
+	phx	; push low word of event record addr
+	jsl NDAACTION	; call the action routine
+	pla	; get the integer result
+	rtl	; and return
+
+moduleClose	rtl
+moduleInit	rtl
+
+	EndP
+
+	End

@@ -1,0 +1,682 @@
+
+---------------------------------------------------------------------
+If you're already a Nifty List user, go straight for NList.Rev...this
+file has not changed since 3.2!
+---------------------------------------------------------------------
+
+===============         DAL Systems                       4-Mar-92
+Nifty List v3.4
+===============
+
+[Apple IIgs, ProDOS, and GS/OS are trademarks of Apple Computer, Inc.]
+----------------------------------------------------------------------
+Nifty List is a Shareware Classic Desk Accessory for the Apple IIgs.
+The original concept was simply to disassemble machine code like the
+Monitor's "L" command, except useful information like toolbox call
+names would be displaed in the right margin.
+
+Nifty List has since grown into a much more general programmer's
+utility.
+
+To install Nifty List, copy NiftyList.CDA and NList.Data into the
+System/Desk.Accs directory of your GS/OS boot disk, and then reboot.
+You will probably also want to copy Nifty List command modules,
+such as Goodies and BB, which provide extra commands you can use
+while in Nifty List.
+
+Nifty List will show up in the CDA list when you press Apple-Ctrl-ESC.
+
+The names for toolbox calls, GS/OS calls, and many other things are in
+the NList.Data file.  You can edit it with a text editor if you want.
+----------------------------------------------------------------------
+
+
+-----------------------
+Nifty List is Shareware
+-----------------------
+Nifty List is Shareware; it is not in the public domain.  Please
+give copies to your friends, your club libraries, your favorite
+bulletin boards, etc.  You may try it free for ten days; after ten
+days, you should either
+
+   (1) send $15 to DAL Systems [CA residents add sales tax; add
+       $5 for postage outside U.S./Canada]
+or
+   (2) stop using Nifty List
+
+When you send your $15, DAL Systems will mail you a 3.5" disk with
+the latest version of Nifty List.  You will also receive the next
+update free.  Once you pay the $15, you are entitled to use future
+updates at no extra cost (but there will be an update fee for DAL
+Systems to send them directly to you).
+
+-------------------
+Guilt-inducing plea
+-------------------
+Nifty List is CHEAP, NOT FREE!
+
+For $15, you can be a legitimate registered user of Nifty List; I
+will answer your questions and listen to your suggestions.  If Nifty
+List were being sold by a big-name company, it would cost a lot more
+and you wouldn't get a chance to try it out legally before paying.
+
+
+
+=====================================================================
+              C O M M A N D   D E S C R I P T I O N S
+=====================================================================
+
+Multiple commands can be entered on one line, like in the Monitor.
+Nifty Lists executes them one at a time, left to right.
+
+Typing digits (0-9 and A-F) affects the "current address", which
+is used by many commands.  It is never necessary to type an address
+immediately before a command, and the current address will already
+have a useful value in many cases.  For example, after 1234L,
+another "L" will continue where the first one left off.
+
+Numbers are generally entered in Hex (base 16).
+
+
+*** Note:  The NList.Rev files (revision hisotry) contains some
+    information that is not currently in this manual.  Be sure
+    to read NList.Rev, too.
+
+
+-----------------------------------
+"=" or "?" -- describe next command
+------------------------------------
+The "=" command describes the next command instead of executing it.
+Type a "?" or a "=" on a line by itself to see what all the valid
+command characters are.
+
+Example:  ?  displays a whole screen full of all the main commands
+          ?i  or  =i  displays a description of the "i" command
+
+
+---------------------------
+"\" -- use a command module
+---------------------------
+Type =\ or ?\ to get a list of all the commands in the Nifty List
+modules that are in your system.
+
+You can get a description of a particular command.  For example,
+=\find
+
+For a description of the Goodies and Big Brother modules, see
+NList.Rev.
+
+For information on writing your own modules, see Writing.Modules,
+Sample.aii, and E16.NList.
+
+-----------------------------------
+"_" and "`" -- evaluate expressions
+-----------------------------------
+_xxx evaluates a toolbox-call expression and displays the result.  xxx
+can be the name of any System or User tool function in your copy of
+NList.Data.
+
+Example:  _NewHandle(_multiply(10,#5),_MMStartUp,C000,0)
+
+If you don't know what all the parameters are, use the quote (") command
+first to find out:  "NewHandle
+
+The grave accent (`) evaluates an expression and display result.  Valid
+forms for expressions are:
+
+--Hex numbers up to four bytes long (0, FF69, E10000).  There are no
+  three-byte-long hex constants--just 1, 2, and 4.
+
+--Decimal numbers up to four bytes long (#0, #65385).  There are no
+  three-byte-long decimal constants--just 1, 2, and 4.
+
+--Constant identifiers (#NewHandle, #rIcon, #GS/OS:Open).  These are
+  all two bytes.
+  
+--Toolbox call (_QDVersion, _NewHandle(#100,1001,C015,0), _GrafOn).
+  The result size depends on the tool call being made.  Many tool
+  calls result in zero-byte-long expressions, which aren't very
+  interesting.
+
+--Negation of an expression (-1, -#151).  This only negates the first
+  four bytes, if there are more than 4.
+
+--Quoted string ("hello").  No length byte or terminator is provided.
+
+--Bracketed list of exprs to be joined together ([_TLVersion _MMVersion],
+  [1 2 3], [3 "abc"], ["abc" 0])
+
+
+------------------------------------
+":" -- store expressions into memory
+------------------------------------
+address:expression expression... stores your favorite bytes into memory.
+
+Example:
+  0/300:1 2 3 "hello" _TLVersion _ReadBParam(5)
+
+
+---------------
+"/" -- set bank
+---------------
+The "/" command sets the current bank, as in the Monitor.
+
+Examples: FE/0L     E06000L
+
+Unlike the Monitor, Nifty List does not require the "/" if you
+type the last 5 digits, or all 6 digits, of an address.
+
+
+------------------------------------------
+"." -- separate beginning and end of range
+------------------------------------------
+The L, ;a , and ;h commands can work with a RANGE of memory: both
+the starting and ending addresses can be specified.  A "." separates
+the two addresses.  The two addresses need not be in the same bank.
+
+Example:  FF/D0D0.D390;a       FE/0.FF/8000L
+
+
+-------------------------------------------
+"," -- separate beginning and size of range
+-------------------------------------------
+Comma works just like period, but the second number is the size of
+the range rather than the ending address.
+
+Example:  FF/D0D0,300;a       FE/0,18000L
+
+
+--------------------------------------
+"L" -- List (disassemble) machine code
+--------------------------------------
+The L command disassembles the specified range of memory or
+one screenful of instructions starting at the specified
+address.
+
+Tool calls, ProDOS 8 calls, GS/OS calls, and more will all be
+identified BY NAME in the list, when known.  You can edit the
+NList.Data file to include new tool calls, or to include User
+tool names (for the E10008/E1000C entry points).
+
+Examples:  0/100.300L    FF1800L    L     2/100W#L
+
+Later in this document, there is an explanation of the PARAMETER
+SUMMARIES that L displays when it comes across toolbox or OS calls.
+
+
+------------------------
+"Q" -- back to CDA menu
+------------------------
+Quit takes you back to the CDA menu.  Hitting ESC while typing
+a command line has the same effect (ESC at other times will
+return you to the Nifty List command line).
+
+
+------------------------------------------------------
+"M", "X", Ctrl-N, Ctrl-E -- set 8- or 16-bit registers
+------------------------------------------------------
+M toggles between 8- and 16-bit Memory operations for the List
+command.
+
+X toggles between 8- and 16-bit indeX operations for the List
+command.
+
+M and X may be set (rather than toggled) using the ">" command.
+
+Ctrl-N (Native mode) sets m and x to 0 (16-bit operations).
+Ctrl-E (Emulation mode) sets m and x to 1 (8-bit operations).
+
+If Auto-tracking is on (as it is by default), the REP, SEP, and
+XCE instructions will also affect the x and m settings.  XCE sets
+m and x to 1 (8-bit operations).
+
+
+-----------------------
+"V" -- toolset versions
+-----------------------
+V (versions) prints a table of all toolsets currently in ROM or RAM.
+Each line in the table has the following form:
+
+  02  + v0102 RAM=02 ROM=2D WAP=00000000  === memory manager ===
+
+All the numbers are in hex.  The first number is the a toolset number.
+Next, a "+" means the toolset is active, and "-" means it is inactive
+["?" means that the toolset's Status call reported an error, and "*"
+means that the toolset doesn't HAVE a Status call].  Next come the
+version number, a count of the number of functions in RAM and ROM, the
+toolset's current Work Area Pointer, and the name of the toolset.
+
+Normally the information displayed refers to System toolsets, which
+are called with JSL $E10000 or JSL $E10004.  If a "1>u" command has
+been given, information on User toolsets (called with JSL $E10008 or
+JSL $E1000C) is displayed instead.  (See Apple IIgs Toolbox Reference
+and Apple IIgs Technical Note #73 for more information on User Toolsets.)
+
+
+----------------------------------
+"T" -- info on one tool or toolset
+----------------------------------
+The T command prints the name and entry point for a tool, or for all
+tools in a given toolset.
+
+Example:  0902T
+  displays the name and current address of the NewHandle function
+  (function number 9 in toolset number 2)
+
+If the function number is 0, the info is printed for every tool in
+the toolset.
+
+Example:  0002T (or just 2T)
+  displays information for every tool in the Memory Manager toolset
+  (toolset number 2)
+
+0T displays the addresses of the system and user Tool Pointer Tables
+and Work Area Pointer Tables.
+
+
+-----------------------
+"H" -- info on a Handle
+-----------------------
+The H command prints information on a handle.  See also W and I.
+Owner pathnames are available for many handles when GS/OS is active.
+The "flags" field of a handle is the sum of the following values:
+
+      8000 = locked
+      4000 = fixed (never moves)
+      2000 = system handle
+      1000 = master pointer block
+      0p00 = purge level (0 to 3)
+               0 = not purgable
+               1 = purgable
+               2 = more purgable
+               3 = most purgable (used by Loader only)
+      0010 = can't cross bank boundary
+      0008 = can't use special memory
+      0004 = page aligned
+      0002 = fixed address
+      0001 = fixed bank
+
+
+---------------------------------------------
+"I" -- info on handles specified by memory ID
+---------------------------------------------
+The I command prints info on all handles matching the specified
+memory manager ID.  "0i" prints info on ALL allocated handles.
+
+There are three parts to an ID:  Type, Aux, and Main.  The first
+digit of an ID is the Type (see table below), the second is the
+Auxiliary type, and the last two are the Main ID.
+
+A handle *matches* the requested ID if all nonzero parts of the
+requested ID are the same in the handle's ID.
+
+(See ">" to set which handle chain is scanned:  allocated handles,
+free handles, or purged handles.)
+
+"I" uses LGetPathname2 (in the system Loader) to determine the
+pathname of the file owning each memory block.  "I" tries first
+with the memory ID for a block; if that fails, it tries again
+with the auxiliary-type nybble zeroed (it ANDs the memory ID with
+$F0FF).
+
+Because the Loader is not available under ProDOS 8, no pathnames
+will appear in "I"'s list while ProDOS 8 is active.
+
+You can restrict the handle list further by specifying an attributes
+value, like this:  "attr.idI".  Handles are listed only if their
+attributes words exactly match the value you specify.
+
+Examples:  0i         (all handles)
+           5000i      (Desk Accessory handles)
+           1001i      (handles with ID $1x01)
+           1F01i      (handles with ID $1F01)
+           A002i      (handles with ID $Ax02)
+           0500i      (handles with Aux-type of 5)
+           C018.1000i (ID=$1xxx and attributes=$C018--typical for code)
+           8000.0i    (all handles with attributes of exactly $8000)
+
+The first digit of an ID identifies it as owned by one of the
+following:
+
+     0 = memory manager
+     1 = application
+     2 = control program
+     3 = OS
+     4 = toolsets (41xx=misc tools, 42xx=scrap mgr)
+     5 = desk accessory
+     6 = runtime library
+     7 = loader
+     8 = firmware
+     9 = tool locator
+     A = setup file
+     F = (used by system)
+
+
+-------------------
+"W" -- What handle?
+-------------------
+The W command determines what handle an address belongs to, and
+then prints info on that handle.  See also H and I.  W simply
+does a FindHandle on the specified (or current) address and then
+executes the H command on the resulting handle.  If the address is
+not in an allocated block of memory, the message "not allocated"
+appears.
+
+Examples:
+  E12000w
+  w
+
+
+------------------------
+"*" -- visit the Monitor
+------------------------
+"*" drops you into the Monitor.  Use Ctrl-Y or Q to return to Nifty
+List.  BEHAVE YOURSELF while you're in the monitor!  If you don't
+know what you're doing, take your disks out of the drives.  Do NOT
+go into BASIC while visiting the Monitor from Nifty List (things
+would get mucked up quickly).
+
+
+--------------------------------------
+"#" -- fetch the last "useful" address
+--------------------------------------
+Using the "#" command is like retyping the last useful address
+printed by the T, I, H, W, ;c, or ;n command.
+
+Example:  101t#L
+
+The address will be the entry address for a tool, the starting
+address of a memory block, or a desk accessory entry point.
+
+
+----------------------------------------
+"S" -- Status (memory statistics + misc)
+----------------------------------------
+S)tatus.   Prints memory use statistics and ROM version.  If ProDOS 16
+or GS/OS is active, it also prints the OS version, the current
+application'sname, the name of the boot volume, and the values of all
+the nonempty prefixes (0 to 31 for GS/OS; 0 to 7 for ProDOS 16).
+
+The "real free memory" value printed with System Disk 3.2 or later
+shows how much memory WOULD be free if all purgable memory blocks
+were purged.
+
+There's some other handy stuff in there, too--try it out.
+
+
+-----------------------------------------
+"@" and "^" -- Fetch 2- or 3-byte address
+-----------------------------------------
+"@" sets the current address to the two-byte value found at the
+given address, leaving the bank number alone.  Example:  0/36@L
+
+"^" sets the current address to the three-byte value found at the
+given address.  Example:  E1/1^L
+
+
+---------------------------------
+"P" -- display parameter settings
+---------------------------------
+P displays current parameter settings.  Use ">" to set them.
+
+
+------------------------------------
+"Z"--save parameter settings to disk
+------------------------------------
+Z tries to save your parameter settings to */System/NList.Settings.
+If it doesn't work, you'll see an error message.
+
+(You have to be under GS/OS to use Z.  If you aren't, you get error
+number $ffff.)
+
+
+---------------------
+">" -- set a variable
+---------------------
+">" sets the value of a Nifty List variable.  Type the value, ">"
+and then the variable.  The following variables are defined:
+
+   L   Language card bank (0 or 1)
+   s   Slot for output (is set to 3 when you enter Nifty List)
+   p   slot number for printer (for Apple-H, etc)
+   u   1=V and T deal with user toolsets; 0=system toolsets
+   x   1=8-bit index registers; 0=16-bit index registers (for L)
+   m   1=8-bit A register; 0=16-bit index register (for L)
+   a   1=automatically track SEP/REP/XCE instructions (0=don't)
+   h   0=allocated handles; 1=purged handles; 2=free handles (for I)
+   r   1=show uncertain softswitch and F8 ROM labels in disassembly
+   d   1=load data file at boot, 2=make data file purgable, 3=both
+   c   1=enable Condensed output (for ;h)
+   v   1=adjust output for voice synthesizer use (no lines of dashes)
+
+Examples:
+   0>L
+   1>S
+
+
+-----------------------------------------------
+(") -- find info in data file by (partial) name
+-----------------------------------------------
+Type a (") followed by a string to display info on all known tools,
+OS calls, vectors, etc. whose names contain the string.  Examples:
+   "Rgn
+   "Version
+   "
+   "open
+   "Bell
+
+Note:  It doesn't matter whether you use upper- or lower-case letters in
+the string following (").
+
+
+---------------------------------
+"~" -- display miscellaneous info
+---------------------------------
+~ displays miscellaneous info according to the next character:
+
+  ~h   HeartBeat interrupt queue tasks
+  ~m   MessageCenter contents (Tool Locator v2.1+)
+  ~p   Port list (current WindowMgr, MenuMgr)
+  ~s   Scrap Manager info (clipboard)
+  ~w   Window list (front to back)
+
+Note:  ~s, ~m, and ~h know the internal structure of some private
+system data structures.  These data structures are subject to change,
+so these commands may stop working with future revisions of the ROM or
+System Software.
+
+
+-----------------------------------
+";" -- interpret info at an address
+-----------------------------------
+Dumps information from the current address according to the
+next character:
+
+   ;a   ASCII dump (1024 bytes or specified range--see ".")
+   ;h   Hex dump   (256  bytes or specified range).  If you specify
+        a range and 1>c is enabled, duplicate lines are compressed
+        to save space and make it easy to see that there is a large
+        block of repetitive data.
+   ;c   Classic Desk Accessory header (name & entry points)
+          ("#" will refer to the main entry point)
+   ;c   Control record (expects handle--get from ;w)
+        0/0;c dumps the content controls of the front window.
+        WindPtr;c dumps the content controls of the specified window.
+   ;n   New Desk Accessory header (name & entry points)
+          ("#" will refer to the Action entry point)
+   ;m   Menu bar--displays information about the specified menu
+        bar and the menus in it.  Expects a menu bar handle,
+        but you can use 0/0 for the current menu bar (0/0;m).
+   ;r   Rectangle--interprets 8 bytes of data as a rectangle,
+        showing all four coordinates as signed decimal numbers
+        in the form:   (left,top)(right,bottom)
+   ;r   Region--summarizes a region from its HANDLE by printing
+        its bouding rectangle followed by "+xxx" to show how
+        many bytes are used to record the non-rectangular parts
+        of the region.  "+0" indicates a rectangular region.
+          (5,12)(635,195)+514
+   ;p   Port (dumps some interesting fields of the specified grafport)
+   ;w   Window (contains a port)    0/0;w dumps the front window
+   ;s   bb/xxxx;s does a stack dump, attempting to find valid return
+        addresses.  The dump starts at 00xxxx and assumes the program
+        counter was in bank bb.
+
+-------------------------------
+Ctrl-Z -- break on next command
+-------------------------------
+Ctrl-Z executes a BRK $42 just before the next command dispatch.
+This is helpful if you're debugging a Nifty List command module
+and have a debugger installed.  Example:  ^Z 1\getdp
+
+
+=====================================================================
+          T O O L B O X    P A R A M E T E R    F O R M A T
+=====================================================================
+
+There are three Nifty List commands that display tool names along
+with parameter summaries:  L, T, and (").  Try these examples:
+
+  FF1800L
+  2B02T
+  2T
+  "BlockMove
+  "erase
+
+In some cases, the parameters had to be abbreviated quite a bit
+to make them fit in the available space in the disassemblies.
+There should still be enough information to remind you of the
+correct parameters for tool calls you have used before.
+
+------------------------------------
+Interpreting the parameter summaries
+------------------------------------
+Some tools take no parameters and return no information.  These
+appear with an empty pair of parentheses after the tool name:
+
+   GrafOff()
+   SystemTask()
+
+
+Tools that take one or more parameters and return no information are
+listed like this:
+
+   SetPort(@Port)
+   WriteBParam(Data,Parm#)
+
+An "@" in front of a parameter means it is a pointer and takes 4
+bytes (2 words).  All parameters not specially marked take 2 bytes
+(1 word).
+
+
+Tools that take no parameters but return one are listed like this:
+
+   GetPort():@Port
+   FreeMem():FreeBytes/4
+
+A "/" and a digit after a parmeter means it takes the specified number
+of bytes.  (When making a tool call, you must push space on the stack
+for any result values *before* pushing the input values.)
+
+
+A few tools return more than one value.  In these cases, the
+results are listed in the order they have been pushed onto the
+stack (so that the first value PULLED is the last one listed):
+
+   GetMouseClamp():Xmn,Xmx,Ymn,Ymx
+
+Each of these values takes 2 bytes (1 word), since there is no
+indication of a different size.
+
+
+Tools that take and return values are listed like this, where a
+trailing "H" indicates a Handle (4 bytes):
+
+   EqualRgn(Rgn1H,Rgn2H):Flag
+
+-----
+Review of parameter sizes:
+
+   Leading  "@"     4-byte pointer
+   Trailing "H"     Handle (4 bytes)
+   Trailing "/n"    n bytes
+
+   All other values are 2 bytes long
+
+-----
+For ProDOS calls, the parameters are shown in parentheses even
+though they actually belong in a parameter block.  For ProDOS 8,
+the first item in the list is the parameter count, which should
+be in the first byte of the parameter block.
+
+   P8:RENAME(2:pn1,pn2)
+
+ProDOS 16 calls (also called class-0 GS/OS calls) do not have a
+parameter count.
+
+   P16:CHANGE_PATH(@Path1,@Path2)
+
+Class-1 GS/OS calls have parameter blocks beginning with a parameter
+count word.  Some calls allow a range of values for the parameter
+count (like Create, which can take from 1 to 7 parameters), and some
+(like Destroy) have a single acceptable value:
+
+   GS/OS:Create(1-7:@P,Acc,Typ,Aux/4,Stg,EOF/4,rEOF/4)
+   GS/OS:Destroy(1:@P)
+
+=====================================================================
+                      S C R E E N   D U M P S
+=====================================================================
+
+When Nifty List is waiting for you to hit a key, you can dump the
+screen to a printer in slot 1 by typing Apple-H (hold down the Apple
+key and press H).
+
+The CapsLock key enables special MouseText dumping for ImageWriter IIs.
+
+Also:
+
+  Apple-4         dumps the 40-column screen as it appeared
+                  BEFORE you hit Apple-Ctrl-ESC
+  Apple-8         dumps the 80-column screen as it appeared
+                  BEFORE you hit Apple-Ctrl-ESC
+  Apple-space     Linefeeds your printer
+  Apple-Return    Formfeeds your printer
+
+
+=====================================================================
+                       S P E C I A L   K E Y S
+=====================================================================
+
+While the display is scrolling, hitting Space stops it.  Each time
+you hit space, the screen advances by one line.  Return (and most
+other keys) resume scrolling.  ESC or Apple-period aborts to the
+command line.
+
+Ctrl-T toggles the super-hires display on and off any time Nifty List
+is watching the keyboard.
+
+Ctrl-X and Clear backspace over all characters on the command line.
+
+
+=====================================================================
+                              T I P S
+=====================================================================
+
+If you try to look up NewWindow by typing  "NewWindow   you will get
+two entries:  NewWindow(...) and NewWindow2(...).  You can get just
+the one you want by including the "(", like this:  "NewWindow(
+
+While in Nifty List, the Zero page of the suspended program can
+currently be found at $E0/1C00 to 1CFF.  This is true as of System
+Disk 5.0.2 and ROM 01 and 03, but it is not guaranteed.
+
+Also not guaranteed: the old stack ($00/0100..01FF) is at $E0/0300..03FF.
+
+If you want to dereference a handle, use the "^" command.  Example:
+E06000^L  or  E06000^;a   (The long way would be E06000;h, examine
+the first 3 bytes displayed, and retype the address.)
+
+Send in your favorite Nifty List tip & see it in print right here!
+
+----------
+End of Nifty List 3.4 description

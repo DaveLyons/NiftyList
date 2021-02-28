@@ -1,0 +1,128 @@
+******************************************
+*
+* Global equates for Nifty List 3.5
+*
+* 14-Jan-90 David A. Lyons
+*
+* Last-modified 9-Aug-92 DAL
+*
+******************************************
+*
+* action codes
+*
+actBirth	equ $0001
+actDeath	equ $0002
+actEnterNL	equ $0003
+actExitNL	equ $0004
+*
+* Nifty List service codes
+*
+;
+; Environment services
+;
+nlRecover	equ $00	;for debugging only
+nlEnter	equ $01
+nlRemoveNL	equ $02
+nlGetInfo	equ $03
+nlInstallHook	equ $04
+nlRemoveHook	equ $05
+nlGetDirectory	equ $06
+nlNewSession	equ $07	;for 3.1
+nlKillSession	equ $08	;for 3.1
+nlSetSession	equ $09	;for 3.1
+nlWelcome	equ $0A	;for 3.1
+nlLoadStuff	equ $0B	;for 3.1
+nlGetTextState	equ $0C	;for 3.3
+nlSetTextState	equ $0D	;for 3.3
+;
+; Information services
+;
+nlGetFirstHandle	equ $10
+nlGetHandleInfo	equ $11
+nlLookup	equ $12
+nlIndLookup	equ $13
+nlGetProcName	equ $14	;for 3.1
+nlClassifyAddr	equ $15	;for 3.3
+nlAddressInfo	equ $16	;for 3.5
+;
+; Utility services
+;
+nlScanHandles	equ $20
+nlDisasm1	equ $21	;for 3.2
+nlExecCmdLine	equ $22	;for 3.1
+nlGetRange	equ $23
+nlGetAGlobal	equ $24
+nlSetAGlobal	equ $25
+nlAbortToCmd	equ $26
+;
+; Input/Output services
+;
+nlWriteChar	equ $30
+nlShowChar	equ $31
+nlWriteStr	equ $32
+nlShowStr	equ $33
+nlWriteCStr	equ $34
+nlShowCStr	equ $35
+nlWriteText	equ $36
+nlShowText	equ $37
+nlWriteByte	equ $38
+nlWriteWord	equ $39
+nlWritePtr	equ $3A
+nlWriteLong	equ $3B
+nlGetLn	equ $3C
+nlGetChar	equ $3D
+nlCheckKey	equ $3E
+nlCrout	equ $3F
+nlSpout	equ $40
+nlPause	equ $41
+nlHandleInfo	equ $42
+nlWriteNoVoice	equ $43
+nlShowWString	equ $44
+;
+; Command-parsing services
+;
+nlChrGet	equ $50
+nlChrGot	equ $51
+nlEatBlanks	equ $52
+nlEvalExpr	equ $54
+;
+; Memory-access services
+;
+nlGetByte	equ $60
+nlGetWord	equ $61
+nlGetLong	equ $62
+*
+* callback selectors used inside nlExecCmdLine
+*
+cbWrite	equ $00
+cbWriteC	equ $02
+cbFlush	equ $04
+cbGetKey	equ $06
+cbChkAbort	equ $08
+cbAbort	equ $0A
+cbGetString	equ $0C
+cbFunWindow	equ $0E
+cbDeath	equ $10
+*
+* nlGetAGlobal/nlSetAGlobal reference numbers
+*
+nlgNUM1	equ $01
+nlgADDR	equ $02
+nlgInfoTable	equ $03	;for 3.3
+*
+* Data file section numbers
+*
+nlSecP8	equ 0	;ProDOS 8 section
+nlSecP16	equ 1	;P16,GS/OS,Shell section
+nlSecSysTool	equ 2	;System Tools section
+nlSecUserTool	equ 3	;User Tools section
+nlSecE1vec	equ 4	;E1xxxx vector section
+nlSecE0vec	equ 5	;E0xxxx vector section
+nlSecF8andSS	equ 6	;softswitch & F8 ROM section
+nlSec01vec	equ 7	;01xxxx vector section
+nlSecNLService	equ 8	;Nifty List service calls section
+nlSecResTypes	equ 9	;resource type names
+nlSecErrors	equ 10	;OS and toolbox error codes
+nlSecHyperCard	equ 11	;HyperCardIIGS callback names (for NL 3.2)
+nlSecReqCode	equ 12	;SendRequest codes (for 3.4)
+*
